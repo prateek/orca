@@ -1,6 +1,14 @@
 /**
  * Property tests for cross-server workspace-session state preservation.
  *
+ * The "servers" here are Remote Orca Servers: the generator builds `runtime:`
+ * execution hosts (paired Orca runtimes), which are exactly what the renderer
+ * partitions session state by (listKnownRuntimeHostIds). These assert the desktop
+ * client keeps each remote server's session slice isolated and lossless when it
+ * is connected to several Orca servers at once. (The live server-side consistency
+ * of repos/worktrees/projects is covered by
+ * src/main/runtime/remote-orca-server-consistency.integration.test.ts.)
+ *
  * These generate random multi-host topologies + sessions and assert invariants
  * that must hold for *any* arrangement of servers and worktrees. The generator is
  * seeded; on failure the runner prints the seed so the exact case re-runs

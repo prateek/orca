@@ -4,6 +4,30 @@ Goal: give Orca a test capability for multi-repo / multi-server interactions, pr
 we exercise the "same project on two servers, then refresh" condition, and add
 property tests showing cross-server operations preserve state.
 
+## Focus: Remote Orca Servers
+
+"Remote Orca Servers" is the **Orca runtime** feature: an Orca instance runs as an
+"Orca Server" and clients pair and connect over an E2EE WebSocket, operating on it
+via RPC (`repo.list`, `worktree.create`, `projectGroup.create`, …). The
+`runtime:<id>` execution host addresses a paired Orca server. Consistency is
+**event-push**: after a mutation the server emits `reposChanged` /
+`worktreesChanged` and subscribed clients re-query.
+
+Two axes are tested:
+
+- **Server-side consistency (live RPC):**
+  `src/main/runtime/remote-orca-server-consistency.integration.test.ts` drives the
+  real `OrcaRuntimeRpcServer` over an ephemeral E2EE WebSocket with multiple
+  paired clients. It proves that after operations (add repo, create worktree,
+  create/move project group) every connected client converges to the server's
+  source of truth, that a random operation sequence converges, and that two Orca
+  servers stay isolated. Harness: `in-memory-orca-runtime.ts` (data fake) +
+  `orca-runtime-server-harness.ts` (real server/client driving).
+- **Client-side session partitioning:** the `multi-host-session-*` tests below use
+  `runtime:` hosts — they assert a desktop client connected to several Orca
+  servers keeps each server's session slice isolated and lossless across a
+  refresh.
+
 ## The reported condition
 
 Add project A on the local machine. Add a remote host B. Add project A on B too,

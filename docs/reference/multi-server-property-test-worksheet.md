@@ -32,6 +32,27 @@ server B must not remove, overwrite, or re-own the local checkout for project A.
   runs seeded operation sequences across local and two runtime hosts.
 - `src/renderer/src/store/slices/repos-multi-host-refresh.test.ts`
   drives the renderer store through local IPC and runtime RPC refreshes.
+- `tests/e2e/ssh-docker-multi-host-repos.property.spec.ts` is the opt-in real
+  host smoke. It starts two Docker-backed SSH hosts, seeds multiple Git repos,
+  adds a matching local checkout, runs a replayable generated sequence of add,
+  remove, rename, reorder, refresh, and renderer reload operations, and asserts
+  that repo partitions, shared project `sourceRepoIds`, and
+  `ProjectHostSetup` ownership stay aligned.
+
+Run the Docker layer with:
+
+```bash
+pnpm run test:e2e:ssh-docker-prop
+```
+
+Use `ORCA_E2E_MULTI_HOST_PROP_SEEDS` and `ORCA_E2E_MULTI_HOST_PROP_STEPS` to
+expand the slow suite locally or in a scheduled job.
+
+## Current Limits
+
+- The Docker property spec covers real local and SSH hosts. Runtime-server
+  refresh behavior is still covered by the fast renderer tests rather than a
+  Docker runtime-server process.
 
 ## Next Seams
 

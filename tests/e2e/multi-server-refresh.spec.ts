@@ -35,16 +35,11 @@ type RemoteWorkspace = {
   worktreeId: string
 }
 
-/** Add an SSH host as a target, connect, add a remote repo, and return its repo +
- *  first worktree. Mirrors the proven flow in ssh-docker-relay-perf.spec.ts. */
-async function connectAndAddRepo(
-  page: Page,
-  host: DockerSshHost,
-  remotePath: string,
-  displayName: string
-): Promise<RemoteWorkspace> {
+/** Connect a Docker SSH host as a single target (one connection per server, like
+ *  the real flow) and return its target id. */
+async function connectHost(page: Page, host: DockerSshHost, label: string): Promise<string> {
   return await page.evaluate(
-    async ({ host, remotePath, displayName }) => {
+    async ({ host, label }) => {
       const store = window.__store
       if (!store) {
         throw new Error('Store unavailable')
@@ -55,7 +50,7 @@ async function connectAndAddRepo(
       try {
         const createdTarget = await window.api.ssh.addTarget({
           target: {
-            label: `${displayName} ${Date.now()}`,
+            label: `${label} ${Date.now()}`,
             host: '127.0.0.1',
             port: host.port,
             username: 'root',
@@ -72,27 +67,46 @@ async function connectAndAddRepo(
         const labels = new Map(store.getState().sshTargetLabels)
         labels.set(createdTarget.id, createdTarget.label)
         store.getState().setSshTargetLabels(labels)
-
-        const result = await window.api.repos.addRemote({
-          connectionId: createdTarget.id,
-          remotePath,
-          displayName
-        })
-        if ('error' in result) {
-          throw new Error(result.error)
-        }
-        await store.getState().fetchRepos()
-        await store.getState().fetchWorktrees(result.repo.id)
-        const worktree = (store.getState().worktreesByRepo[result.repo.id] ?? [])[0]
-        if (!worktree) {
-          throw new Error(`No remote worktree found for ${remotePath}`)
-        }
-        return { targetId: createdTarget.id, repoId: result.repo.id, worktreeId: worktree.id }
+        return createdTarget.id
       } finally {
         credentialUnsub()
       }
     },
-    { host, remotePath, displayName }
+    { host, label }
+  )
+}
+
+/** Add a repo on an already-connected host (so one server can own several repos)
+ *  and return its repo + first worktree. */
+async function addRepoOnHost(
+  page: Page,
+  targetId: string,
+  remotePath: string,
+  displayName: string
+): Promise<RemoteWorkspace> {
+  return await page.evaluate(
+    async ({ targetId, remotePath, displayName }) => {
+      const store = window.__store
+      if (!store) {
+        throw new Error('Store unavailable')
+      }
+      const result = await window.api.repos.addRemote({
+        connectionId: targetId,
+        remotePath,
+        displayName
+      })
+      if ('error' in result) {
+        throw new Error(result.error)
+      }
+      await store.getState().fetchRepos()
+      await store.getState().fetchWorktrees(result.repo.id)
+      const worktree = (store.getState().worktreesByRepo[result.repo.id] ?? [])[0]
+      if (!worktree) {
+        throw new Error(`No remote worktree found for ${remotePath}`)
+      }
+      return { targetId, repoId: result.repo.id, worktreeId: worktree.id }
+    },
+    { targetId, remotePath, displayName }
   )
 }
 
@@ -167,10 +181,13 @@ test.describe('multi-server refresh', () => {
       await waitForSessionReady(orcaPage)
       const localWorktreeId = await waitForActiveWorktree(orcaPage)
 
-      // Same project on B and C, plus B's own separate work.
-      const sharedB = await connectAndAddRepo(orcaPage, hostB, SHARED_APP_PATH, 'shared-app')
-      const sharedC = await connectAndAddRepo(orcaPage, hostC, SHARED_APP_PATH, 'shared-app')
-      const bOnly = await connectAndAddRepo(orcaPage, hostB, B_ONLY_PATH, 'b-only')
+      // One connection per server (host B owns two repos: the shared project plus
+      // its own separate work). This mirrors the reported setup.
+      const targetB = await connectHost(orcaPage, hostB, 'host-B')
+      const targetC = await connectHost(orcaPage, hostC, 'host-C')
+      const sharedB = await addRepoOnHost(orcaPage, targetB, SHARED_APP_PATH, 'shared-app')
+      const bOnly = await addRepoOnHost(orcaPage, targetB, B_ONLY_PATH, 'b-only')
+      const sharedC = await addRepoOnHost(orcaPage, targetC, SHARED_APP_PATH, 'shared-app')
 
       // Same project, two servers → two distinct repos and worktrees.
       expect(sharedB.repoId).not.toBe(sharedC.repoId)
@@ -183,6 +200,13 @@ test.describe('multi-server refresh', () => {
       const tabSharedC = await openMarkerTab(orcaPage, sharedC.worktreeId, 'MARK_shared_C')
       const tabBOnly = await openMarkerTab(orcaPage, bOnly.worktreeId, 'MARK_b_only')
 
+      const allWorktreeIds = [
+        localWorktreeId,
+        sharedB.worktreeId,
+        sharedC.worktreeId,
+        bOnly.worktreeId
+      ]
+
       // Park the active selection on the local worktree so the active assertion is
       // deterministic. (Restoring an active *remote* selection across reload is
       // subject to the relay-load race covered by the unit FAILURE MODE test.)
@@ -191,22 +215,25 @@ test.describe('multi-server refresh', () => {
         localWorktreeId
       )
 
-      // The durable session blob must already carry every server's tabs.
-      const persistedBefore = await readPersistedSession(orcaPage)
-      for (const worktreeId of [
-        localWorktreeId,
-        sharedB.worktreeId,
-        sharedC.worktreeId,
-        bOnly.worktreeId
-      ]) {
-        expect(Object.keys(persistedBefore.tabsByWorktree)).toContain(worktreeId)
-      }
+      // The durable session blob must carry every server's tabs before we reload.
+      // Poll so the debounced session writer has flushed (this is a real assertion
+      // about what persists, not just a wait).
+      await expect
+        .poll(
+          async () => {
+            const persisted = await readPersistedSession(orcaPage)
+            const keys = Object.keys(persisted.tabsByWorktree)
+            return allWorktreeIds.every((id) => keys.includes(id))
+          },
+          { timeout: 15_000, message: 'session did not persist every server’s tabs' }
+        )
+        .toBe(true)
 
       // Hard refresh: reload runs persistWorkspaceSessionByHostSync in beforeunload.
       await orcaPage.reload({ waitUntil: 'domcontentloaded' })
       await orcaPage.waitForFunction(() => Boolean(window.__store), null, { timeout: 30_000 })
       await waitForSessionReady(orcaPage)
-      await reconnectAndRefetch(orcaPage, [sharedB.targetId, sharedC.targetId])
+      await reconnectAndRefetch(orcaPage, [targetB, targetC])
 
       // Every server's worktrees load back, with the same project kept distinct.
       await expect
@@ -223,28 +250,44 @@ test.describe('multi-server refresh', () => {
             }),
           { timeout: 60_000, message: 'remote worktrees did not reload after refresh' }
         )
-        .toEqual(
-          expect.arrayContaining([
-            localWorktreeId,
-            sharedB.worktreeId,
-            sharedC.worktreeId,
-            bOnly.worktreeId
-          ])
-        )
+        .toEqual(expect.arrayContaining(allWorktreeIds))
 
-      // Each worktree's marker tab survived, attributed to its own server. The
-      // shared project's B and C tabs are distinct — no cross-server bleed.
-      const tabsLocal = await getWorktreeTabs(orcaPage, localWorktreeId)
+      // Each worktree's marker tab survived (poll: remote tabs hydrate as the
+      // relays reconnect). No state lost across the refresh.
+      await expect
+        .poll(
+          async () =>
+            orcaPage.evaluate(
+              (ids) => {
+                const state = window.__store?.getState()
+                const tabsFor = (worktreeId: string): string[] =>
+                  (state?.tabsByWorktree?.[worktreeId] ?? []).map((tab) => tab.id)
+                return (
+                  tabsFor(ids.local).includes(ids.tabLocal) &&
+                  tabsFor(ids.sharedB).includes(ids.tabSharedB) &&
+                  tabsFor(ids.sharedC).includes(ids.tabSharedC) &&
+                  tabsFor(ids.bOnly).includes(ids.tabBOnly)
+                )
+              },
+              {
+                local: localWorktreeId,
+                sharedB: sharedB.worktreeId,
+                sharedC: sharedC.worktreeId,
+                bOnly: bOnly.worktreeId,
+                tabLocal,
+                tabSharedB,
+                tabSharedC,
+                tabBOnly
+              }
+            ),
+          { timeout: 30_000, message: 'not all marker tabs restored after refresh' }
+        )
+        .toBe(true)
+
+      // No cross-server bleed: the same project's B and C tabs stay distinct, each
+      // under its own worktree, with its own marker.
       const tabsSharedB = await getWorktreeTabs(orcaPage, sharedB.worktreeId)
       const tabsSharedC = await getWorktreeTabs(orcaPage, sharedC.worktreeId)
-      const tabsBOnly = await getWorktreeTabs(orcaPage, bOnly.worktreeId)
-
-      expect(tabsLocal.map((t) => t.id)).toContain(tabLocal)
-      expect(tabsSharedB.map((t) => t.id)).toContain(tabSharedB)
-      expect(tabsSharedC.map((t) => t.id)).toContain(tabSharedC)
-      expect(tabsBOnly.map((t) => t.id)).toContain(tabBOnly)
-
-      // B's shared tab must not appear under C's worktree, and vice versa.
       expect(tabsSharedC.map((t) => t.id)).not.toContain(tabSharedB)
       expect(tabsSharedB.map((t) => t.id)).not.toContain(tabSharedC)
       expect(tabsSharedB.find((t) => t.id === tabSharedB)?.title).toBe('MARK_shared_B')

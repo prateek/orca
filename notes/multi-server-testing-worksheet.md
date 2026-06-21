@@ -105,6 +105,9 @@ printed seed) instead of adding fast-check.
   two Docker hosts (+ B's own work) + local, marker tab per worktree, renderer
   reload, reconnect, assert no collision and no lost state. Gated behind
   `ORCA_E2E_SSH_DOCKER=1` (POSIX-only), like `ssh-docker-relay-perf.spec.ts`.
+  Executed against live OrbStack containers: 4/4 green (1 + repeat-each=3). One
+  server = one connection owning multiple repos; durable persistence and
+  post-reload tab restoration are polled to avoid the debounced-writer race.
 
 ## Progress log
 

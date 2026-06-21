@@ -87,9 +87,6 @@ printed seed) instead of adding fast-check.
      worktree-scoped entry and active pointers.
    - P4 operation independence: mutating server B's session + refresh leaves
      server A's persisted partition byte-for-byte unchanged.
-
-## Progress log
-
 ## Files
 
 - `src/renderer/src/lib/multi-host-session-test-harness.ts` — topology builders,
@@ -119,12 +116,24 @@ printed seed) instead of adding fast-check.
 - [x] Checks green (27 tests, typecheck, lint, format); fault-injection confirms the suite bites.
 - [x] PR opened: prateek/orca#3.
 
-## Product follow-up (not changed here)
+## Investigated bug hypotheses — what testing actually showed
 
-`fetchWorkspaceSessionFromHosts` reads only the partitions of runtime hosts known
-at boot (`listKnownRuntimeHostIds`). A host whose repos load after session
-hydration is never read, so its tabs/worktree state vanish from the merged
-session and active pointers into it reset — the "weird things on refresh". The
-`FAILURE MODE` test pins this. A fix would gate session hydration on the full
-repo set, or re-merge when late repos arrive. Flagged, not changed, since this is
-a test-only PR.
+- **Active-remote selection lost on refresh** — *hypothesized, then disproved by
+  test.* I traced a path where `hydrateWorkspaceSession` resets `activeWorktreeId`
+  because remote worktrees aren't enumerated until the relay reconnects
+  (`terminals.ts:2526`). The e2e `restores an active remote worktree after a
+  refresh` proves the real behavior is **correct**: the known-but-unloaded
+  re-validation (`terminals.ts:2462`) keeps the worktree valid, so both its tabs
+  and the active selection survive. Kept as a green regression guard. Good thing I
+  ran it instead of "fixing" the boot path against a phantom.
+- **`fetchWorkspaceSessionFromHosts` dropping unknown-host partitions** — defensive,
+  not user-reachable: `App.tsx` awaits `fetchRepos()` (loads the full persisted
+  repo set, incl. runtime metadata) before the session fetch, so the owning host
+  is always known. The `FAILURE MODE` unit test documents the function-level
+  property; it is not a live bug. Downgraded.
+- **Merge global-field fallback order** (`workspace-session-host-split.ts:353`) —
+  only fires when the local partition is absent, which never happens on a normal
+  boot. Marginal; left as-is.
+
+Net: no confirmed latent product bug in this subsystem — it's better guarded than
+first assumed. The one real cleanup was removing a stray tracked `test test.txt`.

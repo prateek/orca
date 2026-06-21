@@ -12,11 +12,20 @@
  *   - every server's worktrees and their tabs come back (no state lost),
  *   - the durable session blob carried the remote tabs across the reload.
  *
+ * A second test parks the active selection on a *remote* worktree and verifies it
+ * is restored after the refresh (not reset to local) — guarding the
+ * known-but-unloaded re-validation in hydrateWorkspaceSession.
+ *
  * Gated behind ORCA_E2E_SSH_DOCKER=1 (POSIX-only) like the other Docker SSH spec.
  */
 import type { Page } from '@stablyai/playwright-test'
 import { test, expect } from './helpers/orca-app'
-import { getWorktreeTabs, waitForActiveWorktree, waitForSessionReady } from './helpers/store'
+import {
+  getActiveWorktreeId,
+  getWorktreeTabs,
+  waitForActiveWorktree,
+  waitForSessionReady
+} from './helpers/store'
 import {
   cleanupDockerSshHosts,
   seedRepoOnHost,
@@ -297,6 +306,56 @@ test.describe('multi-server refresh', () => {
         type: 'multi-server-refresh',
         description: `local + sharedB(${sharedB.repoId}) + sharedC(${sharedC.repoId}) + bOnly survived refresh`
       })
+    } finally {
+      cleanupDockerSshHosts(hosts)
+    }
+  })
+
+  test('restores an active remote worktree after a refresh', async ({ orcaPage }, testInfo) => {
+    test.slow()
+    let hosts: DockerSshHost[] | null = null
+    try {
+      hosts = startDockerSshHosts(testInfo, 1)
+      const [hostB] = hosts
+      seedRepoOnHost(hostB, SHARED_APP_PATH, 'shared app on B')
+
+      await waitForSessionReady(orcaPage)
+      await waitForActiveWorktree(orcaPage)
+
+      const targetB = await connectHost(orcaPage, hostB, 'host-B')
+      const remote = await addRepoOnHost(orcaPage, targetB, SHARED_APP_PATH, 'shared-app')
+      const tabRemote = await openMarkerTab(orcaPage, remote.worktreeId, 'MARK_remote')
+
+      // Park the active selection ON THE REMOTE worktree — the case the user hits.
+      await orcaPage.evaluate(
+        (id) => window.__store?.getState().setActiveWorktree(id),
+        remote.worktreeId
+      )
+      await expect
+        .poll(
+          async () => {
+            const persisted = await readPersistedSession(orcaPage)
+            return Object.keys(persisted.tabsByWorktree).includes(remote.worktreeId)
+          },
+          { timeout: 15_000, message: 'remote tab did not persist' }
+        )
+        .toBe(true)
+
+      // Hard refresh.
+      await orcaPage.reload({ waitUntil: 'domcontentloaded' })
+      await orcaPage.waitForFunction(() => Boolean(window.__store), null, { timeout: 30_000 })
+      await waitForSessionReady(orcaPage)
+
+      // The active selection must come back to the remote worktree, not get reset.
+      await expect
+        .poll(async () => getActiveWorktreeId(orcaPage), {
+          timeout: 30_000,
+          message: 'active remote worktree was not restored after refresh'
+        })
+        .toBe(remote.worktreeId)
+      // And its tab is still there.
+      const tabs = await getWorktreeTabs(orcaPage, remote.worktreeId)
+      expect(tabs.map((t) => t.id)).toContain(tabRemote)
     } finally {
       cleanupDockerSshHosts(hosts)
     }

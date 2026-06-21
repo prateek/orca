@@ -99,6 +99,12 @@ printed seed) instead of adding fast-check.
 - `src/renderer/src/lib/multi-host-session-refresh.test.ts` — the reported
   condition + failure mode.
 - `src/renderer/src/lib/multi-host-session.property.test.ts` — P1–P4 invariants.
+- `tests/e2e/helpers/multi-docker-ssh-hosts.ts` — starts N real Docker SSH hosts
+  concurrently, seeds named repos.
+- `tests/e2e/multi-server-refresh.spec.ts` — real two-relay test: same project on
+  two Docker hosts (+ B's own work) + local, marker tab per worktree, renderer
+  reload, reconnect, assert no collision and no lost state. Gated behind
+  `ORCA_E2E_SSH_DOCKER=1` (POSIX-only), like `ssh-docker-relay-perf.spec.ts`.
 
 ## Progress log
 

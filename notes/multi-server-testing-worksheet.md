@@ -107,4 +107,15 @@ printed seed) instead of adding fast-check.
 - [x] Harness built.
 - [x] Condition test written.
 - [x] Property tests written.
-- [ ] Checks green; PR opened on `prateek/orca`.
+- [x] Checks green (27 tests, typecheck, lint, format); fault-injection confirms the suite bites.
+- [x] PR opened: prateek/orca#3.
+
+## Product follow-up (not changed here)
+
+`fetchWorkspaceSessionFromHosts` reads only the partitions of runtime hosts known
+at boot (`listKnownRuntimeHostIds`). A host whose repos load after session
+hydration is never read, so its tabs/worktree state vanish from the merged
+session and active pointers into it reset — the "weird things on refresh". The
+`FAILURE MODE` test pins this. A fix would gate session hydration on the full
+repo set, or re-merge when late repos arrive. Flagged, not changed, since this is
+a test-only PR.

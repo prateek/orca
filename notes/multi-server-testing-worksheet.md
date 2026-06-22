@@ -15,14 +15,20 @@ via RPC (`repo.list`, `worktree.create`, `projectGroup.create`, …). The
 
 Two axes are tested:
 
-- **Server-side consistency (live RPC):**
+- **Server-side consistency (real runtime):**
   `src/main/runtime/remote-orca-server-consistency.integration.test.ts` drives the
-  real `OrcaRuntimeRpcServer` over an ephemeral E2EE WebSocket with multiple
-  paired clients. It proves that after operations (add repo, create worktree,
-  create/move project group) every connected client converges to the server's
-  source of truth, that a random operation sequence converges, and that two Orca
-  servers stay isolated. Harness: `in-memory-orca-runtime.ts` (data fake) +
-  `orca-runtime-server-harness.ts` (real server/client driving).
+  **real `OrcaRuntimeService`** (its real mutation + event-emission logic) wrapped
+  by the real `OrcaRuntimeRpcServer` over an ephemeral E2EE WebSocket, with **real
+  git worktrees on disk**. Per testing-philosophy the runtime is NOT mocked — only
+  the persistence store is substituted (`in-memory-runtime-store.ts`, the
+  legitimate seam) and electron is mocked. It proves every connected client
+  converges to the server's source of truth after add-repo / create-worktree /
+  create+move project-group, that a random operation sequence converges, and that
+  two Orca servers stay isolated. **Fault injection on the real runtime** (suppress
+  `notifyReposChanged` in `addRepo`) turns the suite red — so it catches a real
+  missing-emit bug, which the earlier mocked-runtime version could not.
+  Harness: `orca-runtime-server-harness.ts` (real server/client driving, real git
+  repo seeding, server-truth reader).
 - **Client-side session partitioning:** the `multi-host-session-*` tests below use
   `runtime:` hosts — they assert a desktop client connected to several Orca
   servers keeps each server's session slice isolated and lossless across a

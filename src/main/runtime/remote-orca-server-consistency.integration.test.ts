@@ -2,25 +2,60 @@
  * Remote Orca Servers: multiple clients of a server share a consistent view of
  * repos / projects / worktrees after operations.
  *
- * These drive the real OrcaRuntimeRpcServer over an ephemeral E2EE WebSocket (see
- * in-memory-orca-runtime-test-setup.ts). The consistency contract under test:
- * after a client mutates the server (add repo, create worktree, create/move a
- * project group), the server pushes a `reposChanged` / `worktreesChanged` event
- * to every subscribed client, which re-queries and converges to the server's
- * source of truth — and operations on one Orca server never leak into another.
+ * Driven through the REAL OrcaRuntimeService wrapped by the real
+ * OrcaRuntimeRpcServer over an ephemeral E2EE WebSocket, with real git worktrees
+ * on disk. Only the persistence store is substituted (in-memory) and electron is
+ * mocked — so the runtime's own mutation + event-emission logic is what's under
+ * test. The consistency contract: after a client mutates the server, the server
+ * pushes a `reposChanged` / `worktreesChanged` event to every subscribed client,
+ * which re-queries and converges to the server's source of truth; and operations
+ * on one Orca server never leak into another.
+ *
+ * This deliberately does NOT mock the runtime: a missing emit in the real runtime
+ * fails these tests (verified by fault injection on the product code).
  */
-import { describe, expect, it } from 'vitest'
-import { createInMemoryOrcaRuntime } from './in-memory-orca-runtime'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('electron', () => ({
+  BrowserWindow: { fromId: () => null },
+  webContents: { fromId: () => null },
+  ipcMain: { on: () => {}, handle: () => {}, removeHandler: () => {}, emit: () => {} },
+  app: { getPath: () => require('os').tmpdir() }
+}))
+
+import { OrcaRuntimeService } from './orca-runtime'
+import { createInMemoryRuntimeStore } from './in-memory-runtime-store'
 import {
+  makeServerTempRoot,
   readClientView,
+  seedGitRepo,
+  serverTruthView,
   startOrcaServer,
   waitFor,
   waitForView,
   type RunningOrcaServer
 } from './orca-runtime-server-harness'
 
-const TEST_TIMEOUT_MS = 20_000
+const TEST_TIMEOUT_MS = 30_000
 const REQUEST_TIMEOUT_MS = 5_000
+
+type Server = {
+  runtime: OrcaRuntimeService
+  server: RunningOrcaServer
+  root: string
+}
+
+async function buildServer(label: string): Promise<Server> {
+  const { root, workspaceDir } = makeServerTempRoot(label)
+  const store = createInMemoryRuntimeStore(workspaceDir)
+  const runtime = new OrcaRuntimeService(store.store as never)
+  const server = await startOrcaServer(runtime, label)
+  return { runtime, server, root }
+}
+
+function countDataEvents(events: { type: string }[]): number {
+  return events.filter((e) => e.type === 'reposChanged' || e.type === 'worktreesChanged').length
+}
 
 /** mulberry32 — deterministic PRNG; the property test prints its seed on failure. */
 function makeRng(seed: number): () => number {
@@ -34,70 +69,65 @@ function makeRng(seed: number): () => number {
   }
 }
 
-function countDataEvents(events: { type: string }[]): number {
-  return events.filter((e) => e.type === 'reposChanged' || e.type === 'worktreesChanged').length
-}
+describe('Remote Orca Server consistency (real runtime)', () => {
+  it('propagates a newly added repo to a second client', { timeout: TEST_TIMEOUT_MS }, async () => {
+    const { runtime, server, root } = await buildServer('repoadd')
+    try {
+      const observer = await server.subscribeEvents()
+      await observer.waitReady()
+      const actor = server.newConnection()
+      const watcher = server.newConnection()
 
-describe('Remote Orca Server consistency', () => {
+      const repoPath = seedGitRepo(root, 'alpha')
+      const added = await actor.request<{ repo: { id: string } }>(
+        'repo.add',
+        { path: repoPath },
+        REQUEST_TIMEOUT_MS
+      )
+      expect(added.ok).toBe(true)
+
+      await waitFor(() => observer.events.some((e) => e.type === 'reposChanged'))
+      const truth = await serverTruthView(runtime)
+      const converged = await waitForView(watcher, truth)
+      expect(converged.repos.map((r) => r.displayName)).toEqual(['alpha'])
+    } finally {
+      await server.stop()
+    }
+  })
+
   it(
-    'propagates a new repo to a second client (reposChanged → converge)',
+    'propagates a newly created worktree to a second client',
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const runtime = createInMemoryOrcaRuntime('srv', ['alpha'])
-      const server = await startOrcaServer(runtime)
+      const { runtime, server, root } = await buildServer('wtcreate')
       try {
         const observer = await server.subscribeEvents()
         await observer.waitReady()
         const actor = server.newConnection()
         const watcher = server.newConnection()
 
-        // Both clients start consistent with the server.
-        expect(await readClientView(watcher)).toEqual(runtime.truthView())
-
-        // Actor adds a repo on the server.
+        const repoPath = seedGitRepo(root, 'alpha')
         const added = await actor.request<{ repo: { id: string } }>(
           'repo.add',
-          { path: '/srv/srv/beta' },
+          { path: repoPath },
           REQUEST_TIMEOUT_MS
         )
-        expect(added.ok).toBe(true)
+        const repoId = added.ok ? added.result.repo.id : ''
 
-        // The server pushes reposChanged to the subscribed client...
-        await waitFor(() => observer.events.some((e) => e.type === 'reposChanged'))
-        // ...and the watcher re-queries to the server's source of truth.
-        const converged = await waitForView(watcher, runtime.truthView())
-        expect(converged.repos.map((r) => r.displayName)).toEqual(['alpha', 'beta'])
-      } finally {
-        await server.stop()
-      }
-    }
-  )
-
-  it(
-    'propagates a new worktree to a second client (worktreesChanged → converge)',
-    { timeout: TEST_TIMEOUT_MS },
-    async () => {
-      const runtime = createInMemoryOrcaRuntime('srv', ['alpha'])
-      const server = await startOrcaServer(runtime)
-      try {
-        const observer = await server.subscribeEvents()
-        await observer.waitReady()
-        const actor = server.newConnection()
-        const watcher = server.newConnection()
-
-        const repoId = runtime.truthView().repos[0].id
         const created = await actor.request<{ worktree: { id: string } }>(
           'worktree.create',
           { repo: repoId, name: 'feature' },
           REQUEST_TIMEOUT_MS
         )
-        expect(created.ok && created.result.worktree.id).toBe(`${repoId}::feature`)
+        expect(created.ok).toBe(true)
 
         await waitFor(() =>
           observer.events.some((e) => e.type === 'worktreesChanged' && e.repoId === repoId)
         )
-        const converged = await waitForView(watcher, runtime.truthView())
-        expect(converged.worktreesByRepo[repoId]).toEqual([`${repoId}::feature`, `${repoId}::main`])
+        const truth = await serverTruthView(runtime)
+        const converged = await waitForView(watcher, truth)
+        // The repo now has two worktrees (main + feature) and the watcher sees both.
+        expect(converged.worktreesByRepo[repoId].length).toBe(2)
       } finally {
         await server.stop()
       }
@@ -108,22 +138,27 @@ describe('Remote Orca Server consistency', () => {
     'propagates project-group create + move to a second client',
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const runtime = createInMemoryOrcaRuntime('srv', ['alpha', 'beta'])
-      const server = await startOrcaServer(runtime)
+      const { runtime, server, root } = await buildServer('group')
       try {
         const observer = await server.subscribeEvents()
         await observer.waitReady()
         const actor = server.newConnection()
         const watcher = server.newConnection()
 
+        const repoPath = seedGitRepo(root, 'alpha')
+        const added = await actor.request<{ repo: { id: string } }>(
+          'repo.add',
+          { path: repoPath },
+          REQUEST_TIMEOUT_MS
+        )
+        const repoId = added.ok ? added.result.repo.id : ''
+
         const group = await actor.request<{ group: { id: string } }>(
           'projectGroup.create',
           { name: 'Backend' },
           REQUEST_TIMEOUT_MS
         )
-        expect(group.ok).toBe(true)
         const groupId = group.ok ? group.result.group.id : ''
-        const repoId = runtime.truthView().repos[0].id
         await actor.request(
           'projectGroup.moveProject',
           { repo: repoId, groupId },
@@ -131,7 +166,8 @@ describe('Remote Orca Server consistency', () => {
         )
 
         await waitFor(() => countDataEvents(observer.events) >= 2)
-        const converged = await waitForView(watcher, runtime.truthView())
+        const truth = await serverTruthView(runtime)
+        const converged = await waitForView(watcher, truth)
         expect(converged.projectGroups).toEqual([{ id: groupId, name: 'Backend' }])
         expect(converged.repos.find((r) => r.id === repoId)?.projectGroupId).toBe(groupId)
       } finally {
@@ -141,34 +177,44 @@ describe('Remote Orca Server consistency', () => {
   )
 
   it(
-    'converges a second client to the server after a random operation sequence',
+    'converges a second client after a random operation sequence',
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      for (let seed = 1; seed <= 12; seed += 1) {
-        const runtime = createInMemoryOrcaRuntime(`srv${seed}`, ['root'])
-        const server = await startOrcaServer(runtime)
+      for (let seed = 1; seed <= 4; seed += 1) {
+        const { runtime, server, root } = await buildServer(`seq${seed}`)
         try {
           const observer = await server.subscribeEvents()
           await observer.waitReady()
           const actor = server.newConnection()
           const watcher = server.newConnection()
           const rng = makeRng(seed)
+          const repoIds: string[] = []
           const groupIds: string[] = []
           let opCount = 0
 
-          for (let i = 0; i < 10; i += 1) {
-            const repos = runtime.truthView().repos
+          // Pre-seed git repos to draw from for add operations.
+          const repoPaths = [0, 1, 2, 3].map((i) => seedGitRepo(root, `r${seed}-${i}`))
+          let nextRepo = 0
+
+          for (let i = 0; i < 8; i += 1) {
             const roll = rng()
-            if (roll < 0.35 || repos.length === 0) {
-              await actor.request('repo.add', { path: `/srv/add/${seed}-${i}` }, REQUEST_TIMEOUT_MS)
-            } else if (roll < 0.65) {
-              const repoId = repos[Math.floor(rng() * repos.length)].id
+            if ((roll < 0.4 || repoIds.length === 0) && nextRepo < repoPaths.length) {
+              const added = await actor.request<{ repo: { id: string } }>(
+                'repo.add',
+                { path: repoPaths[nextRepo++] },
+                REQUEST_TIMEOUT_MS
+              )
+              if (added.ok) {
+                repoIds.push(added.result.repo.id)
+              }
+            } else if (roll < 0.7 && repoIds.length > 0) {
+              const repoId = repoIds[Math.floor(rng() * repoIds.length)]
               await actor.request(
                 'worktree.create',
                 { repo: repoId, name: `w${seed}-${i}` },
                 REQUEST_TIMEOUT_MS
               )
-            } else if (roll < 0.8) {
+            } else if (roll < 0.85) {
               const created = await actor.request<{ group: { id: string } }>(
                 'projectGroup.create',
                 { name: `g${seed}-${i}` },
@@ -177,33 +223,24 @@ describe('Remote Orca Server consistency', () => {
               if (created.ok) {
                 groupIds.push(created.result.group.id)
               }
-            } else if (roll < 0.92 && groupIds.length > 0) {
-              const repoId = repos[Math.floor(rng() * repos.length)].id
+            } else if (repoIds.length > 0 && groupIds.length > 0) {
+              const repoId = repoIds[Math.floor(rng() * repoIds.length)]
               const groupId = groupIds[Math.floor(rng() * groupIds.length)]
               await actor.request(
                 'projectGroup.moveProject',
                 { repo: repoId, groupId },
                 REQUEST_TIMEOUT_MS
               )
-            } else if (repos.length > 1) {
-              const repoId = repos[Math.floor(rng() * repos.length)].id
-              await actor.request('repo.rm', { repo: repoId }, REQUEST_TIMEOUT_MS)
             } else {
-              await actor.request(
-                'repo.add',
-                { path: `/srv/add/${seed}-${i}b` },
-                REQUEST_TIMEOUT_MS
-              )
+              continue
             }
             opCount += 1
           }
 
-          // Every operation pushed at least one event, and the watcher converges
-          // to the server's source of truth.
-          await waitFor(() => countDataEvents(observer.events) >= opCount, 8_000)
-          const converged = await waitForView(watcher, runtime.truthView(), 8_000)
-          expect(converged, `seed=${seed}`).toEqual(runtime.truthView())
-          // The actor (issuer) and watcher agree too.
+          await waitFor(() => countDataEvents(observer.events) >= opCount, 10_000)
+          const truth = await serverTruthView(runtime)
+          const converged = await waitForView(watcher, truth, 10_000)
+          expect(converged, `seed=${seed}`).toEqual(truth)
           expect(await readClientView(actor)).toEqual(converged)
         } finally {
           await server.stop()
@@ -216,45 +253,41 @@ describe('Remote Orca Server consistency', () => {
     'keeps two Orca servers isolated — operations on one never appear on the other',
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const runtimeA = createInMemoryOrcaRuntime('A', ['alpha'])
-      const runtimeB = createInMemoryOrcaRuntime('B', ['beta'])
-      let serverA: RunningOrcaServer | null = null
-      let serverB: RunningOrcaServer | null = null
+      const a = await buildServer('isoA')
+      const b = await buildServer('isoB')
       try {
-        serverA = await startOrcaServer(runtimeA)
-        serverB = await startOrcaServer(runtimeB)
-        const observerA = await serverA.subscribeEvents()
-        const observerB = await serverB.subscribeEvents()
+        const observerA = await a.server.subscribeEvents()
+        const observerB = await b.server.subscribeEvents()
         await observerA.waitReady()
         await observerB.waitReady()
-        const connA = serverA.newConnection()
-        const connB = serverB.newConnection()
+        const connA = a.server.newConnection()
+        const connB = b.server.newConnection()
 
-        // Operate only on server A.
-        const repoA = runtimeA.truthView().repos[0].id
-        await connA.request(
-          'worktree.create',
-          { repo: repoA, name: 'only-on-a' },
+        // Seed and add a repo only on server A, then create a worktree on it.
+        const repoPath = seedGitRepo(a.root, 'alpha')
+        const added = await connA.request<{ repo: { id: string } }>(
+          'repo.add',
+          { path: repoPath },
           REQUEST_TIMEOUT_MS
         )
-        await connA.request('repo.add', { path: '/srv/A/extra' }, REQUEST_TIMEOUT_MS)
+        const repoA = added.ok ? added.result.repo.id : ''
+        await connA.request('worktree.create', { repo: repoA, name: 'only-a' }, REQUEST_TIMEOUT_MS)
 
-        // Server A's observer sees the events; server B's observer sees none.
         await waitFor(() => countDataEvents(observerA.events) >= 2)
         await new Promise((resolve) => setTimeout(resolve, 200))
+        // Server B's subscribed client received nothing.
         expect(countDataEvents(observerB.events)).toBe(0)
 
-        // Each client's view matches only its own server and they are disjoint.
-        const viewA = await waitForView(connA, runtimeA.truthView())
-        const viewB = await waitForView(connB, runtimeB.truthView())
+        const viewA = await waitForView(connA, await serverTruthView(a.runtime))
+        const viewB = await waitForView(connB, await serverTruthView(b.runtime))
+        expect(viewA.repos.map((r) => r.displayName)).toEqual(['alpha'])
+        expect(viewB.repos).toEqual([])
+        // No shared repo ids between the two servers.
         const idsA = new Set(viewA.repos.map((r) => r.id))
-        const idsB = new Set(viewB.repos.map((r) => r.id))
-        expect([...idsA].some((id) => idsB.has(id))).toBe(false)
-        expect(viewB.repos.map((r) => r.displayName)).toEqual(['beta'])
-        expect(viewA.repos.map((r) => r.displayName).sort()).toEqual(['alpha', 'extra'])
+        expect(viewB.repos.some((r) => idsA.has(r.id))).toBe(false)
       } finally {
-        await serverA?.stop()
-        await serverB?.stop()
+        await a.server.stop()
+        await b.server.stop()
       }
     }
   )

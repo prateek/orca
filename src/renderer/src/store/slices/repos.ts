@@ -45,7 +45,7 @@ import { getProjectGroupSubtreeIds } from '../../../../shared/project-groups'
 import { isPathInsideOrEqual } from '../../../../shared/cross-platform-path'
 import { selectProjectGroupRemovalTargets } from './project-group-removal-targets'
 import { getRepoIdFromWorktreeId } from './worktree-helpers'
-import { reconcileFetchedRepos } from './repo-identity-reconcile'
+import { mergeFetchedReposForHost } from './repo-host-refresh-merge'
 import { splitRepoReorderByHost } from './repo-reorder-host-split'
 import {
   assertRuntimeEnvironmentCapability,
@@ -430,32 +430,6 @@ function mergeById<T extends { id: string }>(base: readonly T[], overlay: readon
     }
   }
   return merged
-}
-
-function mergeFetchedReposForHost(
-  previous: readonly Repo[],
-  fetched: Repo[],
-  hostId: string
-): Repo[] {
-  const fetchedIds = new Set(fetched.map((repo) => repo.id))
-  const preserved = previous.filter((repo) => {
-    const existingHostId = getRepoExecutionHostId(repo)
-    return existingHostId !== hostId || fetchedIds.has(repo.id)
-  })
-  const preservedById = new Map(preserved.map((repo) => [repo.id, repo]))
-  const merged = [...preserved]
-  for (const repo of fetched) {
-    const existingIndex = merged.findIndex((entry) => entry.id === repo.id)
-    if (existingIndex === -1) {
-      merged.push(repo)
-      continue
-    }
-    merged[existingIndex] = repo
-  }
-  return reconcileFetchedRepos(
-    previous,
-    merged.filter((repo) => preservedById.has(repo.id) || fetchedIds.has(repo.id))
-  )
 }
 
 async function fetchReposForTarget(

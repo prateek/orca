@@ -6,6 +6,10 @@ const env = {
   ...process.env,
   ORCA_E2E_REMOTE_ORCA_SERVERS: '1'
 }
+const remoteOrcaServerSpecs = [
+  'tests/e2e/remote-orca-server-repo-update-repro.spec.ts',
+  'tests/e2e/remote-orca-servers-multi-repo.property.spec.ts'
+]
 
 const cli = spawnSync(pnpm, ['run', 'build:cli'], {
   stdio: 'inherit',
@@ -31,7 +35,7 @@ const result = spawnSync(
     'exec',
     'playwright',
     'test',
-    'tests/e2e/remote-orca-servers-multi-repo.property.spec.ts',
+    ...remoteOrcaServerSpecs,
     '--config',
     'tests/playwright.config.ts',
     '--project',

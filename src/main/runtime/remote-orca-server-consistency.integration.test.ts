@@ -23,35 +23,17 @@ vi.mock('electron', () => ({
   app: { getPath: () => require('os').tmpdir() }
 }))
 
-import { OrcaRuntimeService } from './orca-runtime'
-import { createInMemoryRuntimeStore } from './in-memory-runtime-store'
 import {
-  makeServerTempRoot,
+  buildOrcaServer as buildServer,
   readClientView,
   seedGitRepo,
   serverTruthView,
-  startOrcaServer,
   waitFor,
-  waitForView,
-  type RunningOrcaServer
+  waitForView
 } from './orca-runtime-server-harness'
 
 const TEST_TIMEOUT_MS = 30_000
 const REQUEST_TIMEOUT_MS = 5_000
-
-type Server = {
-  runtime: OrcaRuntimeService
-  server: RunningOrcaServer
-  root: string
-}
-
-async function buildServer(label: string): Promise<Server> {
-  const { root, workspaceDir } = makeServerTempRoot(label)
-  const store = createInMemoryRuntimeStore(workspaceDir)
-  const runtime = new OrcaRuntimeService(store.store as never)
-  const server = await startOrcaServer(runtime, label)
-  return { runtime, server, root }
-}
 
 function countDataEvents(events: { type: string }[]): number {
   return events.filter((e) => e.type === 'reposChanged' || e.type === 'worktreesChanged').length

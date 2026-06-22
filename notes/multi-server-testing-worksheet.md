@@ -29,6 +29,18 @@ Two axes are tested:
   missing-emit bug, which the earlier mocked-runtime version could not.
   Harness: `orca-runtime-server-harness.ts` (real server/client driving, real git
   repo seeding, server-truth reader).
+
+  Coverage spans the interactions a Remote Orca Server must keep consistent:
+  - creates (`remote-orca-server-consistency.integration.test.ts`): repo add,
+    worktree create, project-group create + move, random op sequence, two-server
+    isolation;
+  - removals & updates (`remote-orca-server-mutations.integration.test.ts`):
+    `repo.update` rename, `repo.rm`, `worktree.rm`, `projectGroup.update`,
+    `projectGroup.delete` — the delete/update emit paths most likely to be missed;
+  - resilience (`remote-orca-server-resilience.integration.test.ts`): a
+    late-joining client sees current state, and a client converges after its event
+    subscription drops mid-mutation (the missed-event gap closes on reconnect +
+    re-query).
 - **Client-side session partitioning:** the `multi-host-session-*` tests below use
   `runtime:` hosts — they assert a desktop client connected to several Orca
   servers keeps each server's session slice isolated and lossless across a

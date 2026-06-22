@@ -19,7 +19,8 @@ import { RemoteRuntimeRequestConnection } from '../../shared/remote-runtime-requ
 import { subscribeRemoteRuntimeRequest } from '../../shared/remote-runtime-client'
 import type { RuntimeClientEventStreamMessage } from '../../shared/runtime-client-events'
 import { OrcaRuntimeRpcServer } from './runtime-rpc'
-import type { OrcaRuntimeService } from './orca-runtime'
+import { OrcaRuntimeService } from './orca-runtime'
+import { createInMemoryRuntimeStore } from './in-memory-runtime-store'
 
 type Pairing = NonNullable<ReturnType<typeof parsePairingCode>>
 
@@ -217,6 +218,36 @@ export async function readClientView(
       .map((g) => ({ id: g.id, name: g.name }))
       .sort((a, b) => a.id.localeCompare(b.id))
   }
+}
+
+export type BuiltOrcaServer = {
+  runtime: OrcaRuntimeService
+  server: RunningOrcaServer
+  /** Directory under which to seed git repos for this server. */
+  root: string
+}
+
+/** Build a Remote Orca Server: real runtime + in-memory store + real RPC server,
+ *  with a realpath'd workspace for real git worktrees. */
+export async function buildOrcaServer(label: string): Promise<BuiltOrcaServer> {
+  const { root, workspaceDir } = makeServerTempRoot(label)
+  const store = createInMemoryRuntimeStore(workspaceDir)
+  const runtime = new OrcaRuntimeService(store.store as never)
+  const server = await startOrcaServer(runtime, label)
+  return { runtime, server, root }
+}
+
+export type ClientTrio = {
+  observer: EventSubscription
+  actor: RemoteRuntimeRequestConnection
+  watcher: RemoteRuntimeRequestConnection
+}
+
+/** Subscribe an event observer (ready) plus an acting and a watching client. */
+export async function connectTrio(server: RunningOrcaServer): Promise<ClientTrio> {
+  const observer = await server.subscribeEvents()
+  await observer.waitReady()
+  return { observer, actor: server.newConnection(), watcher: server.newConnection() }
 }
 
 export async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {

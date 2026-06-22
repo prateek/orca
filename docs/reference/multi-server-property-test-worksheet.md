@@ -3,7 +3,7 @@
 ## Scenario
 
 Orca can show the same project from more than one execution host: local, SSH, and
-runtime server. A user may add `orca` locally, connect to a server that has its
+Remote Orca Server. A user may add `orca` locally, connect to a server that has its
 own `orca` checkout, switch focus between the hosts, then reload the app with
 `Cmd+Shift+R`.
 
@@ -32,27 +32,33 @@ server B must not remove, overwrite, or re-own the local checkout for project A.
   runs seeded operation sequences across local and two runtime hosts.
 - `src/renderer/src/store/slices/repos-multi-host-refresh.test.ts`
   drives the renderer store through local IPC and runtime RPC refreshes.
-- `tests/e2e/ssh-docker-multi-host-repos.property.spec.ts` is the opt-in real
-  host smoke. It starts two Docker-backed SSH hosts, seeds multiple Git repos,
-  adds a matching local checkout, runs a replayable generated sequence of add,
-  remove, rename, reorder, refresh, and renderer reload operations, and asserts
-  that repo partitions, shared project `sourceRepoIds`, and
-  `ProjectHostSetup` ownership stay aligned.
+- `tests/e2e/remote-orca-servers-multi-repo.property.spec.ts` is the opt-in
+  Remote Orca Servers smoke. It starts two real `orca serve` processes with
+  isolated user-data directories, pairs both through
+  `window.api.runtimeEnvironments.addFromPairingCode`, seeds repos through the
+  remote `repo.add` path, runs a replayable generated sequence of add, remove,
+  rename, reorder, refresh, and renderer reload operations, and asserts that
+  repo partitions, shared project `sourceRepoIds`, and `ProjectHostSetup`
+  ownership stay aligned.
 
-Run the Docker layer with:
+Run the real Remote Orca Servers layer with:
 
 ```bash
-pnpm run test:e2e:ssh-docker-prop
+pnpm run test:e2e:remote-orca-servers-prop
 ```
 
-Use `ORCA_E2E_MULTI_HOST_PROP_SEEDS` and `ORCA_E2E_MULTI_HOST_PROP_STEPS` to
-expand the slow suite locally or in a scheduled job.
+Use `ORCA_E2E_REMOTE_ORCA_SERVER_PROP_SEEDS` and
+`ORCA_E2E_REMOTE_ORCA_SERVER_PROP_STEPS` to expand the slow suite locally or in
+a scheduled job.
 
 ## Current Limits
 
-- The Docker property spec covers real local and SSH hosts. Runtime-server
-  refresh behavior is still covered by the fast renderer tests rather than a
-  Docker runtime-server process.
+- The Remote Orca Servers property spec starts real local `orca serve`
+  processes. It does not yet run those servers inside Docker containers or
+  across separate OS hosts.
+- The generated sequence verifies repo/project/setup state consistency. It does
+  not yet cover worktree, terminal, or browser state across multiple Remote Orca
+  Servers.
 
 ## Next Seams
 

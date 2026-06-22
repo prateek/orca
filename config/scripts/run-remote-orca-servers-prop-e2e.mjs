@@ -4,7 +4,16 @@ const extraArgs = process.argv.slice(2)
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 const env = {
   ...process.env,
-  ORCA_E2E_SSH_DOCKER: '1'
+  ORCA_E2E_REMOTE_ORCA_SERVERS: '1'
+}
+
+const cli = spawnSync(pnpm, ['run', 'build:cli'], {
+  stdio: 'inherit',
+  env
+})
+
+if (cli.status !== 0) {
+  process.exit(cli.status ?? 1)
 }
 
 const runtime = spawnSync(pnpm, ['run', 'ensure:electron-runtime'], {
@@ -22,7 +31,7 @@ const result = spawnSync(
     'exec',
     'playwright',
     'test',
-    'tests/e2e/ssh-docker-multi-host-repos.property.spec.ts',
+    'tests/e2e/remote-orca-servers-multi-repo.property.spec.ts',
     '--config',
     'tests/playwright.config.ts',
     '--project',

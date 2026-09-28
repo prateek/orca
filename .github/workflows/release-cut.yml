@@ -1236,17 +1236,20 @@ jobs:
       # actions directory from the commit this workflow file itself came from.
       # Not Windows-only: every platform now consumes install-mobile-dependencies, so
       # any of them can be the one whose cut ref predates the action.
-      - name: Restore draft-publish scripts from the workflow ref
-        # Why: this job checks out the release tag, so a cut from an older SHA
-        # still has electron-builder releaseType:release and no re-draft helper.
-        # The workflow YAML is from main; restore the scripts it invokes.
+      - name: Restore release support scripts from the workflow ref
+        # Why: this job can build a tag older than the workflow. Restore the
+        # workflow-owned release tools without replacing the tag's package manifest.
         shell: bash
         env:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           git fetch --no-tags --depth=1 origin "$WORKFLOW_SHA"
-          git checkout "$WORKFLOW_SHA" -- config/scripts/assert-github-release-is-draft.mjs
+          git checkout "$WORKFLOW_SHA" -- \
+            config/scripts/assert-github-release-is-draft.mjs \
+            config/scripts/bundle-cli-entry.mjs \
+            config/scripts/package-standalone-cli.mjs \
+            resources/cli/bin/orca
 
       - name: Restore composite actions from the workflow ref
         shell: bash
@@ -1427,7 +1430,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pnpm package:standalone-cli
+          if node -e "process.exit(require('./package.json').scripts?.['build:cli']?.includes('bundle-cli-entry') ? 0 : 1)"; then
+            pnpm package:standalone-cli
+          else
+            node config/scripts/bundle-cli-entry.mjs
+            node config/scripts/package-standalone-cli.mjs
+          fi
           version="$(node -p "require('./package.json').version")"
           echo "archive=dist/orca-cli-$version.tgz" >>"$GITHUB_OUTPUT"
           echo "latest=dist/orca-cli.tgz" >>"$GITHUB_OUTPUT"
@@ -1449,6 +1457,8 @@ jobs:
               pairing_code="orca://pair?code=eyJ2IjoyLCJlbmRwb2ludCI6IndzOi8vMTI3LjAuMC4xOjY3NjgiLCJkZXZpY2VUb2tlbiI6InRlc3QtdG9rZW4iLCJwdWJsaWNLZXlCNjQiOiJkR1Z6ZEMxclpYayJ9"
               /opt/orca-cli/bin/orca environment add --name sandbox --pairing-code "$pairing_code" --json >/dev/null
               /opt/orca-cli/bin/orca environment list --json | grep -q sandbox
+              if /opt/orca-cli/bin/orca serve --json >/tmp/orca-serve.json; then exit 1; fi
+              grep -q runtime_serve_failed /tmp/orca-serve.json
             '
 
       - name: Publish standalone CLI

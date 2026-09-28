@@ -89,7 +89,7 @@
     "verify:localization-extraction": "node config/scripts/verify-localization-extraction.mjs",
     "verify:localization-coverage": "node config/scripts/audit-localization-coverage.mjs --check",
     "audit:localization": "node config/scripts/audit-localization-coverage.mjs",
-    "build:cli": "tsc -p config/tsconfig.cli.json --outDir out --composite false --incremental false && pnpm run prepare:cli-output",
+    "build:cli": "tsc -p config/tsconfig.cli.json --outDir out --composite false --incremental false && node config/scripts/bundle-cli-entry.mjs && pnpm run prepare:cli-output",
     "package:standalone-cli": "node config/scripts/package-standalone-cli.mjs",
     "prepare:cli-output": "node config/scripts/verify-cli-bin.mjs --fix-executable --fix-package-json && node config/scripts/install-dev-cli.mjs",
     "test:linux-cli-contract": "node config/scripts/run-linux-cli-launch-contract-docker.mjs --appimage dist/orca-linux.AppImage",

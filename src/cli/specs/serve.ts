@@ -4,7 +4,7 @@ import { GLOBAL_FLAGS } from '../args'
 export const SERVE_COMMAND_SPECS: CommandSpec[] = [
   {
     path: ['serve'],
-    summary: 'Start an Orca runtime server without opening a desktop window',
+    summary: 'Start an Orca runtime server (desktop/headless package required)',
     usage:
       'orca serve [--port <port>] [--pairing-address <host>] [--mobile-pairing] [--no-pairing] [--project-root <path>] [--recipe-json] [--json]',
     allowedFlags: [
@@ -17,6 +17,7 @@ export const SERVE_COMMAND_SPECS: CommandSpec[] = [
       'recipe-json'
     ],
     notes: [
+      'Requires the Orca desktop or headless Electron package.',
       'Runs in the foreground and prints the bound endpoint, advertised endpoint, and pairing status. Stop it with Ctrl+C.',
       '--pairing-address changes only the client-advertised address; use a reachable LAN, Tailscale, SSH-forward, or reverse-proxy endpoint.',
       'Use --recipe-json with --project-root from VM recipes to print the recipe result JSON and leave the server running.',

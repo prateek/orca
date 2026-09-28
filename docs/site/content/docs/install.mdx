@@ -51,11 +51,11 @@ brew install --cask stablyai/orca/orca
 
 ### Standalone CLI (Node 22+)
 
-Sandboxes that cannot run Electron can install the client-only CLI from each GitHub release. The archive contains JavaScript and a small `orca` launcher; it has no Electron, Chromium, or native Linux libraries, so the same artifact runs on Alpine/musl aarch64 and other Node 22+ Unix environments.
+Sandboxes that cannot run Electron can install the client-only CLI from each GitHub release. The archive contains the same compiled CLI entry used by the desktop package and a small `orca` launcher. It has no Electron, Chromium, or native Linux libraries, so the same artifact runs on Alpine/musl aarch64 and other Node 22+ Unix environments.
 
 ```bash
-mkdir -p "$HOME/.local"
-curl -fsSL https://github.com/stablyai/orca/releases/latest/download/orca-cli.tgz | tar -xz -C "$HOME/.local"
+test ! -e "$HOME/.local/bin/orca" || { echo "orca already exists in ~/.local/bin" >&2; exit 1; }
+mkdir -p "$HOME/.local" && curl -fsSL https://github.com/stablyai/orca/releases/latest/download/orca-cli.tgz | tar -xz -C "$HOME/.local"
 ```
 
 Add `$HOME/.local/bin` to `PATH` if it is not there already, then verify the install:
@@ -73,7 +73,7 @@ orca --environment desktop status
 orca worktree ps --host runtime:<environment-id> --json
 ```
 
-Use `orca environment list --json` to find the environment id. Client-side commands such as `help`, `skills get`, and `environment add|list` work without a local runtime. `orca serve` and `orca open` still require the desktop or headless Electron package.
+Use `orca environment list --json` to find the environment id. Client-side commands such as `help`, `skills get`, and `environment add|list` work without a local runtime. `orca serve` and `orca open` report that they require the desktop or headless Electron package; run those commands with `orca-ide` on Linux.
 
 ## First launch
 

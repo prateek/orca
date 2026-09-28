@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { t as listTar, x as extractTar } from 'tar'
+import { parse } from 'yaml'
 import { createStandaloneCliArchive } from './package-standalone-cli.mjs'
 
 const directories = []
@@ -27,6 +28,10 @@ describe('standalone CLI archive', () => {
     const install = temporaryDirectory('orca-cli-install-')
     const entryPath = join(fixture, 'out', 'cli', 'index.js')
     mkdirSync(dirname(entryPath), { recursive: true })
+    writeFileSync(
+      join(fixture, 'out', 'package.json'),
+      `${JSON.stringify({ version: '1.2.3', type: 'commonjs' })}\n`
+    )
     writeFileSync(
       entryPath,
       "#!/usr/bin/env node\nconst fs = require('node:fs')\nconst path = require('node:path')\nconst metadata = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'))\nprocess.stdout.write(metadata.version + '\\n')\n"
@@ -57,6 +62,23 @@ describe('standalone CLI archive', () => {
     expect(execFileSync(join(install, 'bin', 'orca'), { encoding: 'utf8' })).toBe('1.2.3\n')
     expect(
       JSON.parse(readFileSync(join(install, 'lib', 'orca-cli', 'package.json'), 'utf8'))
-    ).toMatchObject({ version: '1.2.3', engines: { node: '>=22' } })
+    ).toEqual({ version: '1.2.3', type: 'commonjs' })
+  })
+
+  it('restores its tools when releasing a tag that predates the archive', () => {
+    const workflow = parse(readFileSync(resolve('.github/workflows/release-cut.yml'), 'utf8'))
+    const steps = workflow.jobs.build.steps
+    const restore = steps.find(
+      (step) => step.name === 'Restore release support scripts from the workflow ref'
+    )
+    const packageCli = steps.find((step) => step.name === 'Package standalone CLI')
+
+    expect(restore.run).toContain('config/scripts/bundle-cli-entry.mjs')
+    expect(restore.run).toContain('config/scripts/package-standalone-cli.mjs')
+    expect(restore.run).toContain('resources/cli/bin/orca')
+    expect(packageCli.run).toContain("['build:cli']?.includes('bundle-cli-entry')")
+    expect(packageCli.run).toContain('node config/scripts/bundle-cli-entry.mjs')
+    const smoke = steps.find((step) => step.name === 'Smoke standalone CLI on Alpine arm64')
+    expect(smoke.run).toContain('runtime_serve_failed')
   })
 })

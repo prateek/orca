@@ -1,40 +1,12 @@
 #!/usr/bin/env node
 
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { isBuiltin } from 'node:module'
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { build } from 'esbuild'
 import { create as createTar } from 'tar'
 
 const root = resolve(import.meta.dirname, '../..')
-const allowedOptionalModules = new Set(['bufferutil', 'utf-8-validate'])
-
-function packageName(specifier) {
-  const parts = specifier.split('/')
-  return specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]
-}
-
-function verifyExternalImports(metafile) {
-  const unsupported = new Set()
-  for (const input of Object.values(metafile.inputs)) {
-    for (const dependency of input.imports) {
-      if (!dependency.external || isBuiltin(dependency.path)) {
-        continue
-      }
-      const dependencyPackage = packageName(dependency.path)
-      if (!allowedOptionalModules.has(dependencyPackage)) {
-        unsupported.add(dependencyPackage)
-      }
-    }
-  }
-  if (unsupported.size > 0) {
-    throw new Error(
-      `Standalone CLI has unbundled dependencies: ${[...unsupported].sort().join(', ')}`
-    )
-  }
-}
 
 export async function createStandaloneCliArchive({
   entryPath,
@@ -52,36 +24,15 @@ export async function createStandaloneCliArchive({
     await mkdir(join(stage, 'share', 'doc', 'orca-cli'), { recursive: true })
     await mkdir(outputDirectory, { recursive: true })
 
-    const result = await build({
-      entryPoints: [entryPath],
-      outfile: join(cliDirectory, 'index.js'),
-      bundle: true,
-      platform: 'node',
-      target: 'node22',
-      format: 'cjs',
-      metafile: true,
-      legalComments: 'none'
-    })
-    verifyExternalImports(result.metafile)
-
+    await copyFile(entryPath, join(cliDirectory, 'index.js'))
+    await copyFile(
+      join(dirname(entryPath), '..', 'package.json'),
+      join(stage, 'lib', 'orca-cli', 'package.json')
+    )
     await copyFile(launcherPath, join(stage, 'bin', 'orca'))
     await copyFile(licensePath, join(stage, 'share', 'doc', 'orca-cli', 'LICENSE'))
     await chmod(join(stage, 'bin', 'orca'), 0o755)
     await chmod(join(cliDirectory, 'index.js'), 0o755)
-    await writeFile(
-      join(stage, 'lib', 'orca-cli', 'package.json'),
-      `${JSON.stringify(
-        {
-          name: '@stablyai/orca-cli-runtime',
-          version,
-          private: true,
-          type: 'commonjs',
-          engines: { node: '>=22' }
-        },
-        null,
-        2
-      )}\n`
-    )
 
     await createTar.asyncFile(
       {

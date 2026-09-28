@@ -8,9 +8,10 @@ import { TERMINAL_CLOSE_COMMAND_SPEC } from './terminal-close'
 export const CORE_COMMAND_SPECS: CommandSpec[] = [
   {
     path: ['open'],
-    summary: 'Launch Orca and wait for the runtime to be reachable',
+    summary: 'Launch Orca and wait for the runtime (desktop/headless package required)',
     usage: 'orca open [--json]',
     allowedFlags: [...GLOBAL_FLAGS],
+    notes: ['Requires the Orca desktop or headless Electron package.'],
     examples: ['orca open', 'orca open --json']
   },
   ...SERVE_COMMAND_SPECS,

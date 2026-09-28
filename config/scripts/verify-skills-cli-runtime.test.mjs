@@ -194,6 +194,22 @@ describe('skills CLI runtime closure', () => {
     }
   })
 
+  it('allows WebSocket accelerators left optional in the bundled CLI entry', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'orca-skills-cli-closure-'))
+    try {
+      await mkdir(join(root, 'cli'), { recursive: true })
+      await writeFile(
+        join(root, 'cli', 'index.js'),
+        "try { require('bufferutil'); require('utf-8-validate') } catch {}\n",
+        'utf8'
+      )
+
+      expect(collectRuntimeClosure(root)).toHaveLength(1)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('rejects optional dependencies resolved only outside the artifact', async () => {
     const root = await mkdtemp(join(tmpdir(), 'orca-skills-cli-closure-'))
     try {

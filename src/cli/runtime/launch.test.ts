@@ -96,10 +96,20 @@ describe('serveOrcaApp', () => {
     vi.restoreAllMocks()
     delete process.env.ORCA_APP_EXECUTABLE
     delete process.env.ORCA_APP_EXECUTABLE_NEEDS_APP_ROOT
+    delete process.env.ORCA_STANDALONE_CLIENT
     delete process.env.ORCA_USER_DATA_PATH
     return Promise.all(
       temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true }))
     )
+  })
+
+  it('explains that serve needs the Electron runtime in the standalone client', () => {
+    process.env.ORCA_STANDALONE_CLIENT = '1'
+
+    expect(() => serveOrcaApp()).toThrow(
+      'This command requires the Orca desktop or headless Electron runtime.'
+    )
+    expect(spawnMock).not.toHaveBeenCalled()
   })
 
   it.runIf(process.platform === 'darwin')(
@@ -642,6 +652,16 @@ describe('launchOrcaApp', () => {
     delete process.env.ORCA_OPEN_COMMAND
     delete process.env.ORCA_APP_EXECUTABLE
     delete process.env.ORCA_APP_EXECUTABLE_NEEDS_APP_ROOT
+    delete process.env.ORCA_STANDALONE_CLIENT
+  })
+
+  it('explains that open needs the Electron runtime in the standalone client', () => {
+    process.env.ORCA_STANDALONE_CLIENT = '1'
+
+    expect(() => launchOrcaApp()).toThrow(
+      'This command requires the Orca desktop or headless Electron runtime.'
+    )
+    expect(spawnMock).not.toHaveBeenCalled()
   })
 
   it('handles asynchronous detached spawn errors without throwing', async () => {

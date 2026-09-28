@@ -16,7 +16,7 @@ The Orca CLI is the `orca` command-line interface for scripting a running Orca e
 
 It ships with the desktop app; register it under [Settings → General → Orca CLI](/docs/settings). On Linux the desktop package's command is `orca-ide`, because GNOME Orca's screen reader already owns `/usr/bin/orca` — see [Install → Linux](/docs/install#linux).
 
-Restricted sandboxes can instead install the [standalone Node client](/docs/install#standalone-cli-node-22). It uses the `orca` command and runs on Alpine/musl aarch64 without Electron. Pair it to a desktop or headless Orca host with `orca environment add --pairing-code ...`; `serve` and `open` remain available only in the Electron package.
+Restricted sandboxes can instead install the [standalone Node client](/docs/install#standalone-cli-node-22). It uses the same compiled CLI as the desktop package, but runs it with stock Node under the `orca` command. It works on Alpine/musl aarch64 without Electron. Pair it to a desktop or headless Orca host with `orca environment add --pairing-code ...`; `serve` and `open` require the Electron package.
 
 Agents can install the matching Orca CLI skill with:
 
@@ -33,8 +33,8 @@ See [Skills registry & MCP](/docs/cli/skills) for every installable Orca skill, 
 Desktop package:
 
 ```
-command -v orca
-orca status --json
+orca status --json     # macOS and Windows
+orca-ide status --json # Linux
 ```
 
 Standalone client:

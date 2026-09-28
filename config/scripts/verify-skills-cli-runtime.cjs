@@ -5,6 +5,7 @@ const { spawnSync } = require('node:child_process')
 const ts = require('typescript-api')
 
 const BUILTINS = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]))
+const BUNDLED_CLI_OPTIONAL_IMPORTS = new Set(['bufferutil', 'utf-8-validate'])
 const CLI_COMMAND_TIMEOUT_MS = 30_000
 
 function artifactPath(outDir, file) {
@@ -86,7 +87,9 @@ function resolveRuntimeImport(outDir, artifactRoot, importer, specifier) {
   try {
     resolved = createRequire(importer).resolve(specifier)
   } catch (error) {
-    if (isOptionalPackageImport(artifactRoot, importer, specifier)) {
+    const isBundledCliOptionalImport =
+      importer === resolve(outDir, 'cli', 'index.js') && BUNDLED_CLI_OPTIONAL_IMPORTS.has(specifier)
+    if (isBundledCliOptionalImport || isOptionalPackageImport(artifactRoot, importer, specifier)) {
       return null
     }
     const detail = error instanceof Error ? error.message : String(error)

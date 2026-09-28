@@ -22,8 +22,13 @@ import { RuntimeClientError } from './types'
 
 const IGNORED_NON_RECIPE_STDOUT = '[serve] ignored non-recipe stdout'
 const USER_NAMESPACE_PROBE_TIMEOUT_MS = 2_000
+const STANDALONE_RUNTIME_MESSAGE =
+  'This command requires the Orca desktop or headless Electron runtime. Use the CLI installed by that package (orca-ide on Linux).'
 
 export function launchOrcaApp(): void {
+  if (process.env.ORCA_STANDALONE_CLIENT === '1') {
+    throw new RuntimeClientError('runtime_open_failed', STANDALONE_RUNTIME_MESSAGE)
+  }
   const overrideCommand = process.env.ORCA_OPEN_COMMAND
   if (typeof overrideCommand === 'string' && overrideCommand.trim().length > 0) {
     spawnDetached(overrideCommand, [], { shell: true })
@@ -297,6 +302,9 @@ export function resolveAppRoot(): string {
 }
 
 export function resolveForegroundOrcaExecutable(): string {
+  if (process.env.ORCA_STANDALONE_CLIENT === '1') {
+    throw new RuntimeClientError('runtime_serve_failed', STANDALONE_RUNTIME_MESSAGE)
+  }
   const overrideExecutable = process.env.ORCA_APP_EXECUTABLE
   if (typeof overrideExecutable === 'string' && overrideExecutable.trim().length > 0) {
     return overrideExecutable

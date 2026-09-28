@@ -1421,6 +1421,47 @@ jobs:
           # the PowerShell scan on every Windows SSH host.
           ORCA_REQUIRE_RELAY_NATIVE_ADDONS: ${{ matrix.platform == 'win' && 'x64,arm64' || '' }}
 
+      - name: Package standalone CLI
+        id: standalone-cli
+        if: matrix.platform == 'linux-arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm package:standalone-cli
+          version="$(node -p "require('./package.json').version")"
+          echo "archive=dist/orca-cli-$version.tgz" >>"$GITHUB_OUTPUT"
+          echo "latest=dist/orca-cli.tgz" >>"$GITHUB_OUTPUT"
+
+      - name: Smoke standalone CLI on Alpine arm64
+        if: matrix.platform == 'linux-arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_root="$RUNNER_TEMP/orca-cli-smoke"
+          mkdir -p "$smoke_root"
+          tar -xzf "${{ steps.standalone-cli.outputs.archive }}" -C "$smoke_root"
+          docker run --rm --network none \
+            --volume "$smoke_root:/opt/orca-cli:ro" \
+            node:22-alpine3.23 sh -euc '
+              /opt/orca-cli/bin/orca --version
+              /opt/orca-cli/bin/orca help >/dev/null
+              /opt/orca-cli/bin/orca skills get orca-cli >/dev/null
+              pairing_code="orca://pair?code=eyJ2IjoyLCJlbmRwb2ludCI6IndzOi8vMTI3LjAuMC4xOjY3NjgiLCJkZXZpY2VUb2tlbiI6InRlc3QtdG9rZW4iLCJwdWJsaWNLZXlCNjQiOiJkR1Z6ZEMxclpYayJ9"
+              /opt/orca-cli/bin/orca environment add --name sandbox --pairing-code "$pairing_code" --json >/dev/null
+              /opt/orca-cli/bin/orca environment list --json | grep -q sandbox
+            '
+
+      - name: Publish standalone CLI
+        if: matrix.platform == 'linux-arm64'
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: gh release upload "${{ needs.cut.outputs.tag }}" "${{ steps.standalone-cli.outputs.archive }}" "${{ steps.standalone-cli.outputs.latest }}" --clobber --repo "${{ github.repository }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Gate runtime file-watcher process isolation
         if: runner.os == 'Linux'
         run: |

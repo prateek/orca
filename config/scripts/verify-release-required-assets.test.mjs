@@ -34,6 +34,12 @@ afterEach(() => {
 })
 
 describe('getRequiredReleaseAssetNames', () => {
+  it('includes fixed and versioned standalone CLI archives', () => {
+    expect(getRequiredReleaseAssetNames('v1.4.27')).toEqual(
+      expect.arrayContaining(['orca-cli.tgz', 'orca-cli-1.4.27.tgz'])
+    )
+  })
+
   it('includes both mac updater ZIP names for the tag version', () => {
     expect(getRequiredReleaseAssetNames('v1.4.27')).toEqual(
       expect.arrayContaining([

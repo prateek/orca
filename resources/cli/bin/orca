@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+ORCA_CLI_PREFIX=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
+exec node "$ORCA_CLI_PREFIX/lib/orca-cli/cli/index.js" "$@"

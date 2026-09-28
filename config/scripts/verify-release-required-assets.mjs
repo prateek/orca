@@ -7,6 +7,8 @@ const API_VERSION = '2022-11-28'
 export function getRequiredReleaseAssetNames(tag) {
   const version = tag.replace(/^v/i, '')
   return [
+    'orca-cli.tgz',
+    `orca-cli-${version}.tgz`,
     'latest-linux.yml',
     'latest-linux-arm64.yml',
     'latest-mac.yml',

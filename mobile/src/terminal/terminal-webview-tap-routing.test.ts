@@ -358,6 +358,16 @@ describe('terminal WebView tap routing', () => {
     expect(posted.filter((m) => m.type === 'terminal-tap')).toHaveLength(1)
   })
 
+  it('still taps when the touch moves a row and back before anything scrolls', async () => {
+    const { posted } = boot('plain output', undefined, 'none', 50)
+    await settle()
+    fireTouch('touchstart', [{ x: 20, y: 100 }])
+    fireTouch('touchmove', [{ x: 20, y: 94 }])
+    fireTouch('touchmove', [{ x: 20, y: 100 }])
+    fireTouch('touchend', [])
+    expect(posted.filter((m) => m.type === 'terminal-tap')).toHaveLength(1)
+  })
+
   it('does not tap when the touch stops a coast', async () => {
     let now = 1_000
     vi.spyOn(Date, 'now').mockImplementation(() => now)

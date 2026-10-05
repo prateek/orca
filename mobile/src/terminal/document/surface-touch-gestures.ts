@@ -8,7 +8,6 @@ import { routeScrollLines, shouldRouteScrollToTerminalInput } from './mouse-inpu
 import {
   applyNormalBufferScrollDelta,
   enqueueNormalBufferScrollDelta,
-  queuedNormalBufferScrollReachesRow,
   resetSmoothScrollOffset
 } from './normal-buffer-smooth-scroll'
 import { dispatcherShouldBlockSurface } from './tap-dispatch'
@@ -201,9 +200,6 @@ export function attachSurfaceEventHandlers(
         } else {
           if (enqueueNormalBufferScrollDelta(scope, deltaY)) {
             updateTouchVelocity(scope, deltaY, dt)
-            if (queuedNormalBufferScrollReachesRow(scope)) {
-              scope.tapCandidate = null
-            }
           } else {
             scope.touchGesture.velY = 0
           }

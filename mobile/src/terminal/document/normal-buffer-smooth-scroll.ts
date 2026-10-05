@@ -43,6 +43,8 @@ export function applyNormalBufferScrollDelta(scope: TerminalDocumentScope, delta
     const applied = clampNormalScrollLines(scope, lines)
     if (applied !== 0) {
       scope.term.scrollLines(applied)
+      // Why: a touch that scrolled a row is a scroll, even inside TAP_SLOP.
+      scope.tapCandidate = null
       // Why: xterm's renderer is row-based. Buffer touch pixels and only
       // commit whole rows so TUI canvas layers do not shimmer between
       // fractional transforms and xterm repaints.

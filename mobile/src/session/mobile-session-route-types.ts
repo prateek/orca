@@ -151,9 +151,14 @@ export type TerminalGestureInputBucket = {
   lastRefillMs: number
 }
 
-export type TerminalGestureInputQueue = {
+/** One validated run of complete control sequences, stamped when the gesture produced it. */
+export type TerminalGestureInputChunk = {
   bytes: string
   sequenceCount: number
+  queuedAtMs: number
+}
+
+export type TerminalGestureInputQueue = {
+  chunks: TerminalGestureInputChunk[]
   timer: ReturnType<typeof setTimeout> | null
-  lastUpdatedMs: number
 }

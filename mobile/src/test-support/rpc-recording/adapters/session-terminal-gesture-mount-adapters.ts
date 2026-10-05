@@ -98,8 +98,15 @@ export function sessionTerminalGestureMountAdapters(
           throw new Error(`Unknown terminal gesture action: ${name}`)
         },
         state: () => ({
-          queuedSequences: queues.current.get(HANDLE)?.sequenceCount ?? null,
-          queuedBytes: queues.current.get(HANDLE)?.bytes ?? null,
+          queuedSequences:
+            queues.current
+              .get(HANDLE)
+              ?.chunks.reduce((total, chunk) => total + chunk.sequenceCount, 0) ?? null,
+          queuedBytes:
+            queues.current
+              .get(HANDLE)
+              ?.chunks.map((chunk) => chunk.bytes)
+              .join('') ?? null,
           inFlight: inFlight.current.has(HANDLE),
           bucketTokens: buckets.current.get(HANDLE)?.tokens ?? null,
           crash: screen.crash()

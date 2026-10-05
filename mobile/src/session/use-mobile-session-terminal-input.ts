@@ -16,10 +16,16 @@ import {
   TERMINAL_GESTURE_INPUT_BUCKET_CAPACITY,
   TERMINAL_GESTURE_INPUT_FLUSH_DELAY_MS,
   TERMINAL_GESTURE_INPUT_MAX_PENDING_SEQUENCES,
-  TERMINAL_GESTURE_INPUT_MAX_QUEUE_AGE_MS,
   TERMINAL_GESTURE_INPUT_REFILL_PER_SECOND
 } from './mobile-session-route-helpers'
-import type { Terminal, TerminalGestureInputQueue } from './mobile-session-route-types'
+import type { Terminal } from './mobile-session-route-types'
+import {
+  appendTerminalGestureInput,
+  countQueuedTerminalGestureSequences,
+  createTerminalGestureInputQueue,
+  pruneTerminalGestureInputQueue,
+  queuedTerminalGestureInputBytes
+} from './terminal-gesture-input-queue'
 import type { MobileSessionFileActionsModel } from './use-mobile-session-file-actions'
 
 export function useMobileSessionTerminalInput(scope: MobileSessionFileActionsModel) {
@@ -101,22 +107,23 @@ export function useMobileSessionTerminalInput(scope: MobileSessionFileActionsMod
     }
 
     terminalGestureInputQueuesRef.current.delete(handle)
+    // Why: gesture arrows parked across a reconnect or a slow ack would move a TUI long after the swipe.
+    pruneTerminalGestureInputQueue(queued, Date.now())
+    const bytes = queuedTerminalGestureInputBytes(queued)
     const isActive =
       handle === activeHandleRef.current && activeSessionTabTypeRef.current === 'terminal'
-    const isFresh = Date.now() - queued.lastUpdatedMs <= TERMINAL_GESTURE_INPUT_MAX_QUEUE_AGE_MS
     const rpc = clientRef.current
-    if (!rpc || connStateRef.current !== 'connected' || !isActive || !isFresh) {
+    if (!rpc || connStateRef.current !== 'connected' || !isActive || bytes.length === 0) {
       return
     }
 
     terminalGestureInputInFlightRef.current.add(handle)
     try {
-      // Why: gesture arrows parked across a reconnect would move a TUI long after the swipe.
       const response = await terminalInputSend.request(
         rpc,
         buildTerminalSendParams({
           terminal: handle,
-          text: queued.bytes,
+          text: bytes,
           enter: false,
           deviceToken: deviceTokenRef.current
         }),
@@ -129,16 +136,8 @@ export function useMobileSessionTerminalInput(scope: MobileSessionFileActionsMod
       // Transient failure
     } finally {
       terminalGestureInputInFlightRef.current.delete(handle)
-      const next = terminalGestureInputQueuesRef.current.get(handle)
-      if (next) {
-        if (Date.now() - next.lastUpdatedMs > TERMINAL_GESTURE_INPUT_MAX_QUEUE_AGE_MS) {
-          if (next.timer) {
-            clearTimeout(next.timer)
-          }
-          terminalGestureInputQueuesRef.current.delete(handle)
-        } else {
-          void flushTerminalGestureInput(handle)
-        }
+      if (terminalGestureInputQueuesRef.current.has(handle)) {
+        void flushTerminalGestureInput(handle)
       }
     }
   }, [])
@@ -149,11 +148,10 @@ export function useMobileSessionTerminalInput(scope: MobileSessionFileActionsMod
       const current = terminalGestureInputQueuesRef.current.get(handle)
       if (
         current &&
-        current.sequenceCount + sequenceCount <= TERMINAL_GESTURE_INPUT_MAX_PENDING_SEQUENCES
+        countQueuedTerminalGestureSequences(current) + sequenceCount <=
+          TERMINAL_GESTURE_INPUT_MAX_PENDING_SEQUENCES
       ) {
-        current.bytes += bytes
-        current.sequenceCount += sequenceCount
-        current.lastUpdatedMs = now
+        appendTerminalGestureInput(current, bytes, sequenceCount, now)
         return
       }
 
@@ -164,10 +162,9 @@ export function useMobileSessionTerminalInput(scope: MobileSessionFileActionsMod
         if (!terminalGestureInputInFlightRef.current.has(handle)) {
           void flushTerminalGestureInput(handle)
         } else {
-          // Why: cap is a soft guideline — append instead of dropping queued bytes; the in-flight flush picks up the merged queue.
-          current.bytes += bytes
-          current.sequenceCount += sequenceCount
-          current.lastUpdatedMs = now
+          // Why: a send is in flight, so this batch cannot go yet; keep the newest reports that still fit and are still fresh.
+          appendTerminalGestureInput(current, bytes, sequenceCount, now)
+          pruneTerminalGestureInputQueue(current, now)
           current.timer = setTimeout(() => {
             current.timer = null
             void flushTerminalGestureInput(handle)
@@ -176,12 +173,8 @@ export function useMobileSessionTerminalInput(scope: MobileSessionFileActionsMod
         }
       }
 
-      const queued: TerminalGestureInputQueue = {
-        bytes,
-        sequenceCount,
-        timer: null,
-        lastUpdatedMs: now
-      }
+      const queued = createTerminalGestureInputQueue()
+      appendTerminalGestureInput(queued, bytes, sequenceCount, now)
       queued.timer = setTimeout(() => {
         queued.timer = null
         void flushTerminalGestureInput(handle)

@@ -89,6 +89,15 @@ export function enqueueNormalBufferScrollDelta(scope: TerminalDocumentScope, del
   return true
 }
 
+/** Whether the deltas queued for the next frame, with the remainder already held, move a row. */
+export function queuedNormalBufferScrollReachesRow(scope: TerminalDocumentScope) {
+  const effectiveCellH = getCellHeight(scope) * getTotalScale(scope)
+  return (
+    effectiveCellH > 0 &&
+    Math.abs(scope.smoothScrollOffsetY - scope.pendingNormalScrollDeltaY) >= effectiveCellH
+  )
+}
+
 export function resetSmoothScrollOffset(scope: TerminalDocumentScope) {
   scope.pendingNormalScrollDeltaY = 0
   if (scope.normalScrollFrameId !== null) {

@@ -15,7 +15,4 @@ if [[ -z "$link_device" ]]; then
 fi
 echo "$link_device" > /run/link-device
 
-# Why: a root netem qdisc with no profile yet, so `tc qdisc change` always has something to change.
-tc qdisc replace dev "$link_device" root netem delay 0ms
-
 exec socat -d "TCP-LISTEN:${listen_port},fork,reuseaddr,nodelay" "TCP:${forward_to},nodelay"

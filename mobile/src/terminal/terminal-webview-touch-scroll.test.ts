@@ -14,6 +14,7 @@ type BufferState = {
 // 40 cols of 8px cells fit a 381px viewport unscaled, so one row is 15 screen px.
 const CELL_HEIGHT = 15
 const FRAME_MS = 16
+const ESC_ARROW_DOWN = '\u001b[B'
 
 function makeTerminal(
   buffer: BufferState,
@@ -110,6 +111,14 @@ describe('terminal WebView touch scrolling', () => {
     return scrollLines.mock.calls.reduce((total, [lines]) => total + lines, 0)
   }
 
+  function terminalInputBytes(): string {
+    return postMessage.mock.calls
+      .map(([raw]): { bytes?: string; type?: string } => JSON.parse(raw))
+      .filter((msg) => msg.type === 'terminal-input')
+      .map((msg) => msg.bytes ?? '')
+      .join('')
+  }
+
   beforeEach(() => {
     animationFrames = []
     buffer = { baseY: 500, type: 'normal', viewportY: 100 }
@@ -172,5 +181,33 @@ describe('terminal WebView touch scrolling', () => {
     runFrames(30)
 
     expect(scrolledRows()).toBeGreaterThan(rowsWhileTouching)
+  })
+
+  it('does not coast when the finger rested before lifting', () => {
+    boot()
+
+    fireTouch('touchstart', { x: 40, y: 400 })
+    dragUp(400, 20, 5)
+    const rowsWhileTouching = scrolledRows()
+    now += 500
+    fireTouch('touchend', null)
+    runFrames(30)
+
+    expect(scrolledRows()).toBe(rowsWhileTouching)
+  })
+
+  it('does not send a resting finger’s momentum to an alternate-screen app', () => {
+    buffer = { baseY: 0, type: 'alternate', viewportY: 0 }
+    boot()
+
+    fireTouch('touchstart', { x: 40, y: 400 })
+    dragUp(400, 20, 5)
+    const bytesWhileTouching = terminalInputBytes()
+    expect(bytesWhileTouching).toContain(ESC_ARROW_DOWN)
+    now += 500
+    fireTouch('touchend', null)
+    runFrames(30)
+
+    expect(terminalInputBytes()).toBe(bytesWhileTouching)
   })
 })

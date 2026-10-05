@@ -1,8 +1,13 @@
+import {
+  scheduleNetworkOutages,
+  shapeImpairedNetwork,
+  type ImpairedNetworkPath
+} from './impaired-network-link'
 import type {
   NetworkDirectionShape,
   NetworkLinkShape,
   NetworkOutageSchedule
-} from './impaired-network-link'
+} from './netem-arguments'
 
 /**
  * Network conditions a person meets while travelling, as netem settings.
@@ -170,3 +175,20 @@ export const NETWORK_TRAVEL_PROFILES = {
       'Measured: median RTT 389 ms on a home-routed travel eSIM (Jang et al., 2024 preprint); fallback handovers take about 0.4-1 s (Kalntis et al., 2024). Loss, rates and outage frequency are estimated.'
   }
 } satisfies Record<string, NetworkTravelProfile>
+
+/**
+ * Puts a path under a profile: its shape and, if it has them, its timed outages. Shaping alone
+ * would give the subway's slow link without its tunnels. Call the returned function to stop the
+ * outages; the shape stays until the path is reshaped or stopped.
+ */
+export function applyNetworkTravelProfile(
+  path: ImpairedNetworkPath,
+  profile: NetworkTravelProfile,
+  onOutage?: (startedAtMs: number, endedAtMs: number) => void
+): () => Promise<void> {
+  shapeImpairedNetwork(path, profile.shape)
+  if (!profile.outages) {
+    return async () => {}
+  }
+  return scheduleNetworkOutages(path, profile.shape, profile.outages, onOutage)
+}

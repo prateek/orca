@@ -4,13 +4,38 @@ import type {
   TerminalGestureInputRun
 } from './mobile-session-route-types'
 
+/**
+ * Scroll reports in one direction are interchangeable, so those still queued collapse into one
+ * run that repeats the newest report at most `maxQueuedScrollReports` times: a backlog built up
+ * behind a slow reply is sent as a short scroll from where the finger is now.
+ */
 export function appendTerminalGestureInput(
   queue: TerminalGestureInputQueue,
   reports: readonly TerminalGestureInputReport[],
-  nowMs: number
+  nowMs: number,
+  maxQueuedScrollReports: number
 ): void {
   let run: TerminalGestureInputRun | undefined
   for (const report of reports) {
+    if (report.scrollDirection) {
+      const tail = queue.runs.at(-1)
+      if (tail?.scroll?.direction === report.scrollDirection) {
+        tail.sequenceCount = Math.min(tail.sequenceCount + 1, maxQueuedScrollReports)
+        tail.scroll.report = report.bytes
+        tail.bytes = report.bytes.repeat(tail.sequenceCount)
+        tail.queuedAtMs = nowMs
+      } else {
+        queue.runs.push({
+          kind: report.kind,
+          bytes: report.bytes,
+          sequenceCount: 1,
+          queuedAtMs: nowMs,
+          scroll: { direction: report.scrollDirection, report: report.bytes }
+        })
+      }
+      run = undefined
+      continue
+    }
     if (run?.kind === report.kind) {
       run.bytes += report.bytes
       run.sequenceCount += 1

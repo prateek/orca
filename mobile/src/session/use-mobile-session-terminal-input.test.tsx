@@ -95,10 +95,10 @@ function mountGestureInput(options: { hostOrdersSends: boolean; roundTripMs: num
       failNext = true
     },
     gesture: (bytes: string) => input.handleTerminalInput(HANDLE, bytes),
-    /** A finger dragging: one wheel report per frame. */
-    async drag(durationMs: number) {
+    /** A finger dragging: wheel reports every frame, one each unless it is a flick. */
+    async drag(durationMs: number, reportsPerFrame = 1) {
       for (let elapsed = 0; elapsed < durationMs; elapsed += 16) {
-        await input.handleTerminalInput(HANDLE, WHEEL_UP)
+        await input.handleTerminalInput(HANDLE, WHEEL_UP.repeat(reportsPerFrame))
         await vi.advanceTimersByTimeAsync(16)
       }
     }
@@ -142,6 +142,15 @@ describe('gesture input to a host that applies sends in order', () => {
     expect(afterFirstReply.length).toBeGreaterThanOrEqual(10)
     expect(Math.min(...gaps)).toBeGreaterThanOrEqual(spacing - 16)
     expect(Math.max(...gaps)).toBeLessThanOrEqual(spacing + 16)
+  })
+
+  it('never sends more scroll reports at once than the cap, even after the window was full', async () => {
+    const phone = mountGestureInput({ hostOrdersSends: true, roundTripMs: SLOW_ROUND_TRIP_MS })
+
+    await phone.drag(2_100, 2)
+
+    const reportsPerSend = phone.sends.map((send) => send.text.length / WHEEL_UP.length)
+    expect(Math.max(...reportsPerSend)).toBeLessThanOrEqual(16)
   })
 
   it('numbers its sends consecutively in one stream, in the order they leave', async () => {
@@ -213,6 +222,15 @@ describe('gesture input to a host that does not advertise in-order application',
     await vi.advanceTimersByTimeAsync(SLOW_ROUND_TRIP_MS * 2)
 
     expect(clicks(phone.sends)).toHaveLength(1)
+  })
+
+  it('sends a short scroll after a slow reply instead of everything swiped meanwhile', async () => {
+    const phone = mountGestureInput({ hostOrdersSends: false, roundTripMs: SLOW_ROUND_TRIP_MS })
+
+    await phone.drag(SLOW_ROUND_TRIP_MS + 100, 2)
+
+    const reportsPerSend = phone.sends.map((send) => send.text.length / WHEEL_UP.length)
+    expect(reportsPerSend).toEqual([2, 16])
   })
 
   it('drops scroll reports that went stale waiting, so the screen stops when the finger did', async () => {

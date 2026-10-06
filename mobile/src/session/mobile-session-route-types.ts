@@ -151,12 +151,16 @@ export type TerminalGestureInputBucket = {
   lastRefillMs: number
 }
 
-/** Consecutive reports of one kind that reached the queue together. */
+/**
+ * Consecutive reports of one kind that reached the queue together, or queued scroll reports in
+ * one direction collapsed to `sequenceCount` repeats of the newest.
+ */
 export type TerminalGestureInputRun = {
   kind: 'click' | 'movement'
   bytes: string
   sequenceCount: number
   queuedAtMs: number
+  scroll?: { direction: string; report: string }
 }
 
 export type TerminalGestureInputQueue = {

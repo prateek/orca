@@ -34,6 +34,7 @@ import {
   TERMINAL_GESTURE_INPUT_FLUSH_DELAY_MS,
   TERMINAL_GESTURE_INPUT_MAX_PENDING_SEQUENCES,
   TERMINAL_GESTURE_INPUT_MAX_QUEUE_AGE_MS,
+  TERMINAL_GESTURE_INPUT_MAX_QUEUED_SCROLL_REPORTS,
   TERMINAL_GESTURE_INPUT_REFILL_PER_SECOND
 } from './mobile-session-route-helpers'
 import type { Terminal } from './mobile-session-route-types'
@@ -223,7 +224,12 @@ export function useMobileSessionTerminalInput(scope: MobileSessionFileActionsMod
         queued = { runs: [], timer: null }
         terminalGestureInputQueuesRef.current.set(handle, queued)
       }
-      appendTerminalGestureInput(queued, reports, Date.now())
+      appendTerminalGestureInput(
+        queued,
+        reports,
+        Date.now(),
+        TERMINAL_GESTURE_INPUT_MAX_QUEUED_SCROLL_REPORTS
+      )
       // Why: a click must not sit out the debounce or a pacing delay meant for scroll sends.
       if (
         reports.some((report) => report.kind === 'click') ||

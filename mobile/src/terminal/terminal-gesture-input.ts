@@ -7,6 +7,8 @@ const ESC = '\x1b'
 export type TerminalGestureInputReport = {
   readonly bytes: string
   readonly kind: 'click' | 'movement'
+  /** Set on wheel and arrow-scroll reports: equal for reports that scroll the same way in the same encoding, wherever the finger was. */
+  readonly scrollDirection?: string
 }
 const MAX_TERMINAL_GESTURE_INPUT_LENGTH = 2048
 const MAX_TERMINAL_GESTURE_INPUT_SEQUENCES = 32
@@ -22,6 +24,20 @@ function isDefaultMouseClick(bytes: string, offset: number): boolean {
 
 function isSgrMouseClick(bytes: string, offset: number): boolean {
   return bytes.startsWith(`${ESC}[<0;`, offset)
+}
+
+function scrollDirectionOf(sequence: string): string | undefined {
+  if (sequence.length === 3) {
+    return sequence
+  }
+  if (sequence.startsWith(`${ESC}[<64;`) || sequence.startsWith(`${ESC}[<65;`)) {
+    return sequence.slice(0, 5)
+  }
+  const button = sequence.charCodeAt(3)
+  if (sequence.startsWith(`${ESC}[M`) && (button === 96 || button === 97)) {
+    return sequence.slice(0, 4)
+  }
+  return undefined
 }
 
 function isDefaultMouseGestureSequence(bytes: string, offset: number): number | null {
@@ -102,10 +118,13 @@ export function splitTerminalGestureInput(bytes: string): TerminalGestureInputRe
     if (reports.length === MAX_TERMINAL_GESTURE_INPUT_SEQUENCES) {
       return null
     }
+    const sequence = bytes.slice(offset, next)
+    const scrollDirection = scrollDirectionOf(sequence)
     reports.push({
-      bytes: bytes.slice(offset, next),
+      bytes: sequence,
       kind:
-        isSgrMouseClick(bytes, offset) || isDefaultMouseClick(bytes, offset) ? 'click' : 'movement'
+        isSgrMouseClick(bytes, offset) || isDefaultMouseClick(bytes, offset) ? 'click' : 'movement',
+      ...(scrollDirection ? { scrollDirection } : {})
     })
     offset = next
   }

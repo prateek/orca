@@ -59,6 +59,7 @@ import {
 } from './helpers/remote-connection-observation'
 import { focusActiveTerminalInput } from './helpers/terminal'
 import { rendererNowMs } from './helpers/terminal-echo-probe'
+import { runWithTopologyTeardown } from './helpers/topology-teardown'
 
 const RUN = process.env.ORCA_E2E_IMPAIRED_LATENCY === '1' && process.env.ORCA_E2E_SSH_DOCKER === '1'
 const RECOVERY_MS = 90_000
@@ -68,8 +69,11 @@ type OutageCycle = {
   pane: 'same-shell' | 'shell-replaced' | 'dead'
   /** Milliseconds from the restore until a shell answered in the pane; null if none did. */
   echoedAfterMs: number | null
-  /** Milliseconds from the restore until the store showed the host connected; null if never. */
-  connectedAfterMs: number | null
+  /** What the store said about the host: it never changed, came back, or did not come back. */
+  host:
+    | { kind: 'never-left-connected' }
+    | { kind: 'reconnected'; afterMs: number }
+    | { kind: 'not-connected-again' }
   /** Timed from the cut taking effect. */
   timeline: RemoteConnectionChange[]
 }
@@ -95,12 +99,15 @@ async function cutAndWaitForEcho(
   // showed meanwhile, timed from the cut, is the finding.
   const samples: RemoteConnectionSample[] = []
   let sampling = true
+  let samplerError: unknown = null
   const sampler = (async (): Promise<void> => {
     while (sampling) {
       samples.push(await sampleRemoteConnection(page, connection))
       await sleep(500)
     }
-  })()
+  })().catch((error: unknown) => {
+    samplerError = error
+  })
   try {
     // Renderer clock minus this process's clock, so cut and restore times sit among the samples.
     const clockOffsetMs = (await rendererNowMs(page)) - Date.now()
@@ -122,21 +129,41 @@ async function cutAndWaitForEcho(
     }
     sampling = false
     await sampler
+    if (samplerError) {
+      throw samplerError
+    }
     const timeline = remoteConnectionChanges(samples, cutAt + clockOffsetMs)
     const restoredAtMs = restoredAt - cutAt
+    // Why exact: "connected, 1 host shown offline" is the sidebar disagreeing, not connected.
+    const leftConnected = timeline.some((change) => change.state !== 'connected')
     const connected = timeline.find(
-      (change) => change.atMs >= restoredAtMs && change.state.startsWith('connected')
+      (change) => change.atMs >= restoredAtMs && change.state === 'connected'
     )
     return {
       pane:
         answeredBy === null ? 'dead' : answeredBy === shell.pid ? 'same-shell' : 'shell-replaced',
       echoedAfterMs,
-      connectedAfterMs: connected ? connected.atMs - restoredAtMs : null,
+      host: !leftConnected
+        ? { kind: 'never-left-connected' }
+        : connected
+          ? { kind: 'reconnected', afterMs: connected.atMs - restoredAtMs }
+          : { kind: 'not-connected-again' },
       timeline
     }
   } finally {
     sampling = false
-    await sampler.catch(() => undefined)
+    await sampler
+  }
+}
+
+function describeHost(host: OutageCycle['host']): string {
+  switch (host.kind) {
+    case 'never-left-connected':
+      return 'never left connected'
+    case 'reconnected':
+      return `connected again ${(host.afterMs / 1000).toFixed(0)} s after the link was restored`
+    case 'not-connected-again':
+      return 'not connected again at any point in that time'
   }
 }
 
@@ -175,68 +202,70 @@ test.describe('SSH terminal pane after a long outage', () => {
     })
     test.setTimeout((6 + runs * 3) * 60_000)
     let started: ImpairedDockerSshTarget | null = null
-    try {
-      started = await startImpairedDockerSshTarget(process.cwd())
-      const { target, network } = started
-      const { remote, shell } = await openImpairedDockerSshShell(orcaPage, started)
-      const session: ImpairedTerminalSession = {
-        page: orcaPage,
-        network,
-        connection: { kind: 'ssh', targetId: remote.targetId },
-        shell
-      }
-      shapeImpairedNetwork(network, profile.shape)
-      let relays = listDockerSshRelayProcesses(target).length
-      console.log(`[ssh-outage] shell pid ${shell.pid}; ${relays} relay processes`)
+    await runWithTopologyTeardown(
+      async () => {
+        started = await startImpairedDockerSshTarget(process.cwd())
+        const { target, network } = started
+        const { remote, shell } = await openImpairedDockerSshShell(orcaPage, started)
+        const session: ImpairedTerminalSession = {
+          page: orcaPage,
+          network,
+          connection: { kind: 'ssh', targetId: remote.targetId },
+          shell
+        }
+        shapeImpairedNetwork(network, profile.shape)
+        let relays = listDockerSshRelayProcesses(target).length
+        console.log(`[ssh-outage] shell pid ${shell.pid}; ${relays} relay processes`)
 
-      for (let cycle = 1; cycle <= runs; cycle += 1) {
-        const result = await cutAndWaitForEcho(session, profile.shape, cutMs)
-        const relaysNow = listDockerSshRelayProcesses(target).length
-        console.log(
-          `[ssh-outage] cut ${cycle} of ${runs} (${profile.name}, ${cutMs / 1000}s): host connected ` +
-            `${result.connectedAfterMs ?? 'never'} ms after restore; pane ${result.pane}` +
-            `${result.echoedAfterMs === null ? '' : `, answered ${result.echoedAfterMs} ms after restore`}; ` +
-            `relay processes ${relays} > ${relaysNow}; app showed: ${describeTimeline(result.timeline)}`
-        )
-        if (result.pane === 'dead') {
-          const status = await readSshConnectionStatus(orcaPage, remote.targetId)
-          const remoteShell = execDockerSshRelayTargetCommand(
-            target,
-            `ps -o pid=,etime= -p ${session.shell.pid} || echo gone`
-          ).trim()
-          const freshTab = await describeFreshTab(
-            orcaPage,
-            remote.worktreeId,
-            remote.targetId,
-            session.shell.pid
+        for (let cycle = 1; cycle <= runs; cycle += 1) {
+          const result = await cutAndWaitForEcho(session, profile.shape, cutMs)
+          const relaysNow = listDockerSshRelayProcesses(target).length
+          console.log(
+            `[ssh-outage] cut ${cycle} of ${runs} (${profile.name}, ${cutMs / 1000}s): host ` +
+              `${describeHost(result.host)}; pane ${result.pane}` +
+              `${result.echoedAfterMs === null ? '' : `, answered ${result.echoedAfterMs} ms after restore`}; ` +
+              `relay processes ${relays} > ${relaysNow}; app showed: ${describeTimeline(result.timeline)}`
           )
-          throw new Error(
-            `#25783: no shell answered in the terminal pane in the ${RECOVERY_MS / 1000} s after ` +
-              `cut ${cycle} of ${runs} (${cutMs / 1000} s on the ${profile.name} link). The host showed ` +
-              `connected again ${result.connectedAfterMs === null ? 'at no point in that time' : `${(result.connectedAfterMs / 1000).toFixed(0)} s after the link was restored`}` +
-              ` (status now: ${status}). The remote shell ${session.shell.pid} ` +
-              `${remoteShell === 'gone' ? 'has exited' : `is alive (pid, elapsed: ${remoteShell})`}; ${freshTab}. ` +
-              `Relay processes on the host: ${relays} before this cut, ${relaysNow} after. ` +
-              `App timeline from the cut: ${describeTimeline(result.timeline)}`
-          )
-        }
-        if (result.pane === 'shell-replaced') {
-          // Why not a failure: the pane works, but the session behind it was replaced. Not
-          // #25783; it is reported so a run that saw it is not read as a clean pass.
-          const replacement = await prepareMeasuredShell(orcaPage, 30_000)
-          if (!replacement) {
-            throw new Error(`The replacement shell stopped answering after cut ${cycle}`)
+          if (result.pane === 'dead') {
+            const status = await readSshConnectionStatus(orcaPage, remote.targetId)
+            const remoteShell = execDockerSshRelayTargetCommand(
+              target,
+              `ps -o pid=,etime= -p ${session.shell.pid} || echo gone`
+            ).trim()
+            const freshTab = await describeFreshTab(
+              orcaPage,
+              remote.worktreeId,
+              remote.targetId,
+              session.shell.pid
+            )
+            throw new Error(
+              `#25783: no shell answered in the terminal pane in the ${RECOVERY_MS / 1000} s after ` +
+                `cut ${cycle} of ${runs} (${cutMs / 1000} s on the ${profile.name} link). The host ` +
+                `${describeHost(result.host)} (status now: ${status}). The remote shell ${session.shell.pid} ` +
+                `${remoteShell === 'gone' ? 'has exited' : `is alive (pid, elapsed: ${remoteShell})`}; ${freshTab}. ` +
+                `Relay processes on the host: ${relays} before this cut, ${relaysNow} after. ` +
+                `App timeline from the cut: ${describeTimeline(result.timeline)}`
+            )
           }
-          console.log(`[ssh-outage] shell ${session.shell.pid} replaced by ${replacement.pid}`)
-          session.shell = replacement
-        } else if (!(await clearMeasuredShell(orcaPage, session.shell, 30_000))) {
-          throw new Error(`Shell ${session.shell.pid} answered after cut ${cycle} but then stopped`)
+          if (result.pane === 'shell-replaced') {
+            // Why not a failure: the pane works, but the session behind it was replaced. Not
+            // #25783; it is reported so a run that saw it is not read as a clean pass.
+            const replacement = await prepareMeasuredShell(orcaPage, 30_000)
+            if (!replacement) {
+              throw new Error(`The replacement shell stopped answering after cut ${cycle}`)
+            }
+            console.log(`[ssh-outage] shell ${session.shell.pid} replaced by ${replacement.pid}`)
+            session.shell = replacement
+          } else if (!(await clearMeasuredShell(orcaPage, session.shell, 30_000))) {
+            throw new Error(
+              `Shell ${session.shell.pid} answered after cut ${cycle} but then stopped`
+            )
+          }
+          relays = relaysNow
         }
-        relays = relaysNow
-      }
-      expect(await readSshConnectionStatus(orcaPage, remote.targetId)).toBe('connected')
-    } finally {
-      stopImpairedDockerSshTarget(started)
-    }
+        expect(await readSshConnectionStatus(orcaPage, remote.targetId)).toBe('connected')
+      },
+      () => stopImpairedDockerSshTarget(started)
+    )
   })
 })

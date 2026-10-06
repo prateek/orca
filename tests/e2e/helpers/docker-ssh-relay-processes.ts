@@ -22,13 +22,26 @@ type RelayProcessRow = {
   cwd: string
 }
 
-const LIST_RELAY_PROCESSES_COMMAND = `
+/**
+ * Walks /proc and runs `body` for each process with `argv`, `base` (argv[1]'s basename, the
+ * script node runs) and `pid` set. Why /proc rather than `pgrep -f`: that pattern would also
+ * match the shell running it.
+ */
+function relayProcessWalk(body: string): string {
+  return `
 for proc in /proc/[0-9]*; do
   [ -r "$proc/cmdline" ] || continue
   argv=()
   mapfile -d '' -t argv < "$proc/cmdline" 2>/dev/null || continue
   entry="\${argv[1]:-}"
   base="\${entry##*/}"
+  pid="\${proc##*/}"
+${body}
+done
+`
+}
+
+const LIST_RELAY_PROCESSES_COMMAND = relayProcessWalk(`
   type=
   if [ "$base" = relay-watcher.js ]; then
     type=watcher
@@ -38,12 +51,15 @@ for proc in /proc/[0-9]*; do
     done
   fi
   [ -n "$type" ] || continue
-  pid="\${proc##*/}"
   ppid="$(awk '/^PPid:/{print $2}' "$proc/status" 2>/dev/null)"
   cwd="$(readlink "$proc/cwd" 2>/dev/null)"
   printf '%s\\t%s\\t%s\\t%s\\n' "$type" "$pid" "$ppid" "$cwd"
-done
-`
+`)
+
+const LIST_EVERY_RELAY_PROCESS_COMMAND = relayProcessWalk(`
+  case "$base" in relay.js|relay-watcher.js) ;; *) continue ;; esac
+  printf '%s %s %s\\n' "$pid" "$base" "\${argv[*]:2}"
+`)
 
 function parseRelayProcessRows(output: string): RelayProcessRow[] {
   if (!output) {
@@ -82,26 +98,13 @@ export function readDockerSshRelayProcessSnapshot(
 }
 
 /**
- * Every relay process on the target as "pid role…" lines: daemons, `--connect` bridges and
- * watchers alike. For diagnostics that count what a reconnect leaves behind.
- *
- * Why /proc rather than `pgrep -f relay`: that pattern also matches the shell running it.
+ * Every relay process on the target as "pid script args" lines: daemons, `--connect` bridges
+ * and watchers alike. For diagnostics that count what a reconnect leaves behind.
  */
 export function listDockerSshRelayProcesses(target: DockerSshRelayTarget): string[] {
-  const output = execDockerSshRelayTargetCommand(
-    target,
-    `
-for proc in /proc/[0-9]*; do
-  [ -r "$proc/cmdline" ] || continue
-  argv=()
-  mapfile -d '' -t argv < "$proc/cmdline" 2>/dev/null || continue
-  base="\${argv[1]##*/}"
-  case "$base" in relay.js|relay-watcher.js) ;; *) continue ;; esac
-  printf '%s %s %s\\n' "\${proc##*/}" "$base" "\${argv[*]:2}"
-done
-`
-  )
-  return output.split('\n').filter((line) => line.length > 0)
+  return execDockerSshRelayTargetCommand(target, LIST_EVERY_RELAY_PROCESS_COMMAND)
+    .split('\n')
+    .filter((line) => line.length > 0)
 }
 
 export function readDockerSshRelayProcessSnapshots(

@@ -267,6 +267,8 @@ async function measureProfile(
 /**
  * Runs every profile once per round, so slow drift in the machine or the app spreads across all
  * profiles instead of landing on whichever ran last. Each result is appended as it is measured.
+ * Returns only the (run, profile) pairs asked for, whether measured now or kept from a resumed
+ * file; the summary covers everything in the file.
  */
 export async function runImpairedLatencyMatrix(
   session: ImpairedTerminalSession,
@@ -302,5 +304,6 @@ export async function runImpairedLatencyMatrix(
       summarizeImpairedLatencyRuns(options.spec, results)
     )
   }
-  return results
+  const requested = new Set(options.profiles.map((key) => NETWORK_TRAVEL_PROFILES[key].name))
+  return results.filter((result) => result.run <= options.runs && requested.has(result.profile))
 }

@@ -4,7 +4,7 @@ import path from 'node:path'
 import type { Page } from '@stablyai/playwright-test'
 import { decodePairingOffer, encodePairingOffer } from '../../../src/shared/pairing'
 import {
-  assertContainerAddressForwarderLived,
+  containerAddressForwarderFailure,
   startContainerAddressForwarder,
   type ContainerAddressForwarder
 } from './container-address-forwarder'
@@ -161,12 +161,13 @@ export async function openDockerRemoteOrcaServerShell(
   return { environmentId, worktreeId, shell }
 }
 
-export function stopDockerRemoteOrcaServer(server: DockerRemoteOrcaServer | null): void {
+/** Returns the forwarder's failure, if it died during the run, for the spec to raise. */
+export function stopDockerRemoteOrcaServer(server: DockerRemoteOrcaServer | null): Error | null {
   if (!server) {
-    return
+    return null
   }
   server.forwarder.stop()
   stopImpairedNetwork(server.network)
   spawnSync('docker', ['rm', '-f', server.containerName], { stdio: 'ignore', timeout: 30_000 })
-  assertContainerAddressForwarderLived(server.forwarder)
+  return containerAddressForwarderFailure(server.forwarder)
 }

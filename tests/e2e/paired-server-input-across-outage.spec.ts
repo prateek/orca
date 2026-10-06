@@ -33,6 +33,7 @@ import {
 } from './helpers/impaired-terminal-latency-scenarios'
 import { clearMeasuredShell, prepareMeasuredShell } from './helpers/measured-remote-shell'
 import { test } from './helpers/orca-app'
+import { runWithTopologyTeardown } from './helpers/topology-teardown'
 
 const APP_IMAGE = process.env.ORCA_E2E_REMOTE_SERVER_APPIMAGE
 const RUN = process.env.ORCA_E2E_IMPAIRED_LATENCY === '1' && Boolean(APP_IMAGE)
@@ -61,51 +62,54 @@ test.describe('Paired remote server input across an outage', () => {
     })
     test.setTimeout((8 + runs * 3) * 60_000)
     let server: DockerRemoteOrcaServer | null = null
-    try {
-      server = await startDockerRemoteOrcaServer(process.cwd(), APP_IMAGE ?? '')
-      const { environmentId, shell } = await openDockerRemoteOrcaServerShell(orcaPage, server)
-      const session: ImpairedTerminalSession = {
-        page: orcaPage,
-        network: server.network,
-        connection: { kind: 'runtime', environmentId },
-        shell
-      }
-      shapeImpairedNetwork(server.network, profile.shape)
-      const reports: string[] = []
-      const lostInput: string[] = []
-      const unanswered: string[] = []
-      for (let run = 1; run <= runs; run += 1) {
-        if (!(await clearMeasuredShell(orcaPage, session.shell, 30_000))) {
-          const recovered = await prepareMeasuredShell(orcaPage, 60_000)
-          if (!recovered) {
-            throw new Error(`The shell stopped answering before run ${run}:\n${reports.join('\n')}`)
+    await runWithTopologyTeardown(
+      async () => {
+        server = await startDockerRemoteOrcaServer(process.cwd(), APP_IMAGE ?? '')
+        const { environmentId, shell } = await openDockerRemoteOrcaServerShell(orcaPage, server)
+        const session: ImpairedTerminalSession = {
+          page: orcaPage,
+          network: server.network,
+          connection: { kind: 'runtime', environmentId },
+          shell
+        }
+        shapeImpairedNetwork(server.network, profile.shape)
+        const reports: string[] = []
+        const lostInput: string[] = []
+        const unanswered: string[] = []
+        for (let run = 1; run <= runs; run += 1) {
+          if (!(await clearMeasuredShell(orcaPage, session.shell, 30_000))) {
+            const recovered = await prepareMeasuredShell(orcaPage, 60_000)
+            if (!recovered) {
+              throw new Error(
+                `The shell stopped answering before run ${run}:\n${reports.join('\n')}`
+              )
+            }
+            session.shell = recovered
           }
-          session.shell = recovered
+          const cut = await measureCut(session, profile, { kind: 'forced', cutMs })
+          const report = describeRun(run, cut)
+          console.log(`[server-outage] ${report}`)
+          reports.push(report)
+          // Why apart: a shell that never answered cannot show loss, only that the pane was dead.
+          if (cut.lost === null) {
+            unanswered.push(report)
+          } else if (cut.lost > 0 || cut.duplicated !== 0) {
+            lostInput.push(report)
+          }
         }
-        const cut = await measureCut(session, profile, { kind: 'forced', cutMs })
-        const report = describeRun(run, cut)
-        console.log(`[server-outage] ${report}`)
-        reports.push(report)
-        // Why apart: a shell that never answered cannot show loss, only that the pane was dead.
-        if (cut.lost === null) {
-          unanswered.push(report)
-        } else if (cut.lost > 0 || cut.duplicated !== 0) {
-          lostInput.push(report)
+        if (lostInput.length > 0 || unanswered.length > 0) {
+          const unknown =
+            unanswered.length > 0
+              ? `\nIn ${unanswered.length} more the shell never answered, so loss could not be judged:\n${unanswered.join('\n')}`
+              : ''
+          throw new Error(
+            `#25784: ${lostInput.length} of ${runs} runs did not deliver every character typed around a ` +
+              `${cutMs / 1000} s outage on the ${profile.name} link. Each line ends with what ` +
+              `the runtime status showed, timed from the cut:\n${lostInput.join('\n')}${unknown}`
+          )
         }
-      }
-      if (lostInput.length > 0 || unanswered.length > 0) {
-        const unknown =
-          unanswered.length > 0
-            ? `\nIn ${unanswered.length} more the shell never answered, so loss could not be judged:\n${unanswered.join('\n')}`
-            : ''
-        throw new Error(
-          `#25784: ${lostInput.length} of ${runs} runs did not deliver every character typed around a ` +
-            `${cutMs / 1000} s outage on the ${profile.name} link. Each line ends with what ` +
-            `the runtime status showed, timed from the cut:\n${lostInput.join('\n')}${unknown}`
-        )
-      }
-    } finally {
-      stopDockerRemoteOrcaServer(server)
-    }
+      },
+      () => stopDockerRemoteOrcaServer(server)
+    )
   })
 })

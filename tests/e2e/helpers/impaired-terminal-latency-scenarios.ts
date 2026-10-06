@@ -209,12 +209,16 @@ export async function measureCut(
 
   const samples: RemoteConnectionSample[] = []
   let sampling = true
+  // Why catch at creation: a throw before the await below would otherwise be unhandled.
+  let samplerError: unknown = null
   const sampler = (async (): Promise<void> => {
     while (sampling) {
       samples.push(await sampleRemoteConnection(page, session.connection))
       await sleep(400)
     }
-  })()
+  })().catch((error: unknown) => {
+    samplerError = error
+  })
 
   let typed = 0
   const type = async (count: number, cadenceMs: number): Promise<void> => {
@@ -259,6 +263,9 @@ export async function measureCut(
     const report = await waitForEchoes(page, typed, 120_000)
     sampling = false
     await sampler
+    if (samplerError) {
+      throw samplerError
+    }
 
     const restoredAtRendererMs = restoredAt === null ? null : restoredAt + clockOffsetMs
     const echoesAfterRestore = report.samples.flatMap((sample) =>
@@ -288,6 +295,6 @@ export async function measureCut(
     }
   } finally {
     sampling = false
-    await sampler.catch(() => undefined)
+    await sampler
   }
 }

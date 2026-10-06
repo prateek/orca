@@ -21,29 +21,50 @@ export type ContainerAddressForwarder = {
   stop: () => void
 }
 
-/** Throws if the forwarder died during the run; call after the rest of a topology is torn down. */
-export function assertContainerAddressForwarderLived(forwarder: ContainerAddressForwarder): void {
-  if (forwarder.exited) {
-    throw new Error(
-      `The container address forwarder on port ${forwarder.port} died during the run ` +
-        `(code ${forwarder.exited.code}, signal ${forwarder.exited.signal})`
-    )
-  }
+/**
+ * An error to raise once a topology is torn down, if the forwarder died during the run; null
+ * otherwise. Kept apart from teardown so it never replaces the failure the run was about.
+ */
+export function containerAddressForwarderFailure(
+  forwarder: ContainerAddressForwarder
+): Error | null {
+  return forwarder.exited
+    ? new Error(
+        `The container address forwarder on port ${forwarder.port} died during the run ` +
+          `(code ${forwarder.exited.code}, signal ${forwarder.exited.signal})`
+      )
+    : null
 }
 
+// Why wait for the upstream connect: accepting at once would turn a refused or unreachable
+// container (SYN retries run ~75 s on macOS) into a connection that goes silent mid-handshake,
+// which is not what the app would see on a real path. A failed connect resets the client instead.
+// Why exit on stdin end: the parent may be killed without a chance to stop the forwarder.
 const FORWARDER_SCRIPT = `
 const net = require('node:net')
 const [host, port] = [process.argv[1], Number(process.argv[2])]
 const server = net.createServer((client) => {
+  client.pause()
+  client.setNoDelay(true)
+  client.on('error', () => {})
+  let connected = false
   const upstream = net.connect(port, host)
-  for (const socket of [client, upstream]) {
-    socket.setNoDelay(true)
-    socket.on('error', () => {})
-    socket.on('close', () => { client.destroy(); upstream.destroy() })
-  }
-  client.pipe(upstream).pipe(client)
+  upstream.setNoDelay(true)
+  upstream.on('error', () => {})
+  upstream.once('connect', () => {
+    connected = true
+    for (const socket of [client, upstream]) {
+      socket.on('close', () => { client.destroy(); upstream.destroy() })
+    }
+    client.pipe(upstream).pipe(client)
+    client.resume()
+  })
+  upstream.once('close', () => { if (!connected) client.resetAndDestroy() })
+  client.once('close', () => upstream.destroy())
 })
 server.listen(0, '127.0.0.1', () => console.log('FORWARDER_PORT=' + server.address().port))
+process.stdin.on('end', () => process.exit(0))
+process.stdin.resume()
 `
 
 export function startContainerAddressForwarder(
@@ -51,7 +72,7 @@ export function startContainerAddressForwarder(
   port: number
 ): Promise<ContainerAddressForwarder> {
   const child = spawn(process.execPath, ['-e', FORWARDER_SCRIPT, address, String(port)], {
-    stdio: ['ignore', 'pipe', 'inherit']
+    stdio: ['pipe', 'pipe', 'inherit']
   })
   let exited: ContainerAddressForwarder['exited'] = null
   let stopping = false

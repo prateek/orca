@@ -1,16 +1,9 @@
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
+import { docker } from './docker-command'
 import {
   execDockerSshRelayTargetControlCommand,
   type DockerSshRelayTarget
 } from './docker-ssh-relay-target'
-
-function run(args: string[], opts: { timeoutMs?: number } = {}): string {
-  return execFileSync('docker', args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: opts.timeoutMs ?? 30_000
-  }).trim()
-}
 
 function tryRun(args: string[], opts: { timeoutMs?: number } = {}): boolean {
   return (
@@ -63,11 +56,11 @@ echo "$killed"
  * verified locally: a stream stalls while paused and resumes intact on unpause.
  */
 export function stallDockerSshRelayTarget(target: DockerSshRelayTarget): void {
-  run(['pause', target.containerName])
+  docker(['pause', target.containerName])
 }
 
 export function resumeDockerSshRelayTarget(target: DockerSshRelayTarget): void {
-  run(['unpause', target.containerName])
+  docker(['unpause', target.containerName])
 }
 
 export async function withStalledDockerSshRelayTarget<T>(

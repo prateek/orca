@@ -36,6 +36,7 @@ import {
   runImpairedLatencyMatrix
 } from './helpers/impaired-terminal-latency-matrix'
 import { expect, test } from './helpers/orca-app'
+import { runWithTopologyTeardown } from './helpers/topology-teardown'
 
 const APP_IMAGE = process.env.ORCA_E2E_REMOTE_SERVER_APPIMAGE
 const RUN = process.env.ORCA_E2E_IMPAIRED_LATENCY === '1' && Boolean(APP_IMAGE)
@@ -51,34 +52,35 @@ test.describe('Paired remote server terminal latency on impaired networks', () =
     const settings = readImpairedLatencyMatrixSettings(process.env, testInfo.outputDir)
     test.setTimeout((10 + settings.runs * settings.profiles.length * 3) * 60_000)
     let server: DockerRemoteOrcaServer | null = null
-    try {
-      server = await startDockerRemoteOrcaServer(process.cwd(), APP_IMAGE ?? '')
-      const { environmentId, shell } = await openDockerRemoteOrcaServerShell(orcaPage, server)
-      const session = {
-        page: orcaPage,
-        network: server.network,
-        connection: { kind: 'runtime' as const, environmentId },
-        shell
-      }
-
-      const added = await measureAddedEchoDelay(session)
-      console.log(
-        `[desktop-server] echo p50 unshaped=${added.baselineMs.toFixed(0)}ms, with 300ms each way=${added.delayedMs.toFixed(0)}ms`
-      )
-      expect(added.delayedMs - added.baselineMs).toBeGreaterThanOrEqual(600)
-
-      const results = await runImpairedLatencyMatrix(session, {
-        ...settings,
-        spec: 'desktop-server',
-        context: {
-          serverAppImage: path.basename(APP_IMAGE ?? ''),
-          unshapedEchoP50Ms: Math.round(added.baselineMs),
-          echoP50With300MsEachWayMs: Math.round(added.delayedMs)
+    await runWithTopologyTeardown(
+      async () => {
+        server = await startDockerRemoteOrcaServer(process.cwd(), APP_IMAGE ?? '')
+        const { environmentId, shell } = await openDockerRemoteOrcaServerShell(orcaPage, server)
+        const session = {
+          page: orcaPage,
+          network: server.network,
+          connection: { kind: 'runtime' as const, environmentId },
+          shell
         }
-      })
-      expect(results).toHaveLength(settings.runs * settings.profiles.length)
-    } finally {
-      stopDockerRemoteOrcaServer(server)
-    }
+
+        const added = await measureAddedEchoDelay(session)
+        console.log(
+          `[desktop-server] echo p50 unshaped=${added.baselineMs.toFixed(0)}ms, with 300ms each way=${added.delayedMs.toFixed(0)}ms`
+        )
+        expect(added.delayedMs - added.baselineMs).toBeGreaterThanOrEqual(600)
+
+        const results = await runImpairedLatencyMatrix(session, {
+          ...settings,
+          spec: 'desktop-server',
+          context: {
+            serverAppImage: path.basename(APP_IMAGE ?? ''),
+            unshapedEchoP50Ms: Math.round(added.baselineMs),
+            echoP50With300MsEachWayMs: Math.round(added.delayedMs)
+          }
+        })
+        expect(results).toHaveLength(settings.runs * settings.profiles.length)
+      },
+      () => stopDockerRemoteOrcaServer(server)
+    )
   })
 })

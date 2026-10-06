@@ -7,7 +7,7 @@ import type { Page } from '@stablyai/playwright-test'
 import { docker } from './docker-command'
 import { ensureDockerSshRelayImage } from './docker-ssh-relay-image'
 import {
-  assertContainerAddressForwarderLived,
+  containerAddressForwarderFailure,
   startContainerAddressForwarder,
   type ContainerAddressForwarder
 } from './container-address-forwarder'
@@ -55,7 +55,10 @@ export async function startImpairedDockerSshTarget(root: string): Promise<Impair
   ensureDockerSshRelayImage(root)
   const tempDir = mkdtempSync(path.join(os.tmpdir(), 'orca-desk-ssh-'))
   const identityFile = path.join(tempDir, 'id_ed25519')
-  execFileSync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-f', identityFile, '-q'])
+  execFileSync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-f', identityFile, '-q'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 30_000
+  })
   const publicKey = readFileSync(`${identityFile}.pub`, 'utf8').trim()
   const containerName = `orca-desk-ssh-${randomUUID().slice(0, 8)}`
   const target: DockerSshRelayTarget = {
@@ -122,12 +125,13 @@ export async function openImpairedDockerSshShell(
   return { remote, shell }
 }
 
-export function stopImpairedDockerSshTarget(started: ImpairedDockerSshTarget | null): void {
+/** Returns the forwarder's failure, if it died during the run, for the spec to raise. */
+export function stopImpairedDockerSshTarget(started: ImpairedDockerSshTarget | null): Error | null {
   if (!started) {
-    return
+    return null
   }
   started.forwarder.stop()
   stopImpairedNetwork(started.network)
   cleanupDockerSshRelayTarget(started.target)
-  assertContainerAddressForwarderLived(started.forwarder)
+  return containerAddressForwarderFailure(started.forwarder)
 }

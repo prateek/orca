@@ -275,7 +275,10 @@ export function startDockerSshRelayTarget(testInfo: TestInfo): DockerSshRelayTar
   const bindHost = host === '127.0.0.1' ? host : '0.0.0.0'
   const tempDir = mkdtempSync(path.join(os.tmpdir(), 'orca-ssh-docker-'))
   const identityFile = path.join(tempDir, 'id_ed25519')
-  execFileSync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-f', identityFile, '-q'])
+  execFileSync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-f', identityFile, '-q'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 30_000
+  })
   const publicKey = readFileSync(`${identityFile}.pub`, 'utf8').trim()
   const containerName = `orca-ssh-e2e-${testInfo.workerIndex}-${Date.now()}-${randomUUID().slice(0, 8)}`
   let target: DockerSshRelayTarget | null = null

@@ -149,7 +149,14 @@ export async function installTerminalEchoProbe(
           }
           return
         }
-        if (event.key.length !== 1 || samples.length >= target.length) {
+        // Why no modifiers: the `c` of a Ctrl+C is not a typed character.
+        if (
+          event.key.length !== 1 ||
+          event.ctrlKey ||
+          event.metaKey ||
+          event.altKey ||
+          samples.length >= target.length
+        ) {
           return
         }
         const sample = { index: samples.length, keyAtMs: now, parsedAtMs: null, renderedAtMs: null }

@@ -37,6 +37,7 @@ import {
 import { prepareMeasuredShell, sleep } from './helpers/measured-remote-shell'
 import { expect, test } from './helpers/orca-app'
 import { readSshConnectionStatus } from './helpers/remote-connection-observation'
+import { runWithTopologyTeardown } from './helpers/topology-teardown'
 
 const RUN = process.env.ORCA_E2E_IMPAIRED_LATENCY === '1' && process.env.ORCA_E2E_SSH_DOCKER === '1'
 
@@ -50,66 +51,67 @@ test.describe('SSH terminal latency on impaired networks', () => {
     const settings = readImpairedLatencyMatrixSettings(process.env, testInfo.outputDir)
     test.setTimeout((10 + settings.runs * settings.profiles.length * 3) * 60_000)
     let started: ImpairedDockerSshTarget | null = null
-    try {
-      started = await startImpairedDockerSshTarget(process.cwd())
-      const { target } = started
-      console.log(`[desktop-ssh] target ${target.containerName} at ${target.host}`)
-      const { remote, shell } = await openImpairedDockerSshShell(orcaPage, started)
-      const session = {
-        page: orcaPage,
-        network: started.network,
-        connection: { kind: 'ssh' as const, targetId: remote.targetId },
-        shell
-      }
-
-      const added = await measureAddedEchoDelay(session)
-      console.log(
-        `[desktop-ssh] echo p50 unshaped=${added.baselineMs.toFixed(0)}ms, with 300ms each way=${added.delayedMs.toFixed(0)}ms`
-      )
-      expect(added.delayedMs - added.baselineMs).toBeGreaterThanOrEqual(600)
-
-      const results = await runImpairedLatencyMatrix(session, {
-        ...settings,
-        spec: 'desktop-ssh',
-        context: {
-          relayGracePeriodSeconds: 'default',
-          unshapedEchoP50Ms: Math.round(added.baselineMs),
-          echoP50With300MsEachWayMs: Math.round(added.delayedMs)
-        },
-        reopenTerminal: async (deadShellPid) => {
-          // Why: tells a dead relay or shell apart from a pane the app no longer feeds.
-          const deadShell = execDockerSshRelayTargetCommand(
-            target,
-            `ps -o pid=,etime=,comm= -p ${deadShellPid} || echo "shell ${deadShellPid} gone"`
-          )
-          const relays = listDockerSshRelayProcesses(target)
-          console.log(
-            `[desktop-ssh] reopening; remote: ${deadShell.trim()}; ${relays.length} relay processes`
-          )
-          // Why retry: on a lossy path the reconnect itself can fail, as it would for a person.
-          for (let attempt = 1; attempt <= 3; attempt += 1) {
-            try {
-              await reconnectDockerSshRelayTarget(orcaPage, remote.targetId)
-              break
-            } catch (error) {
-              console.log(`[desktop-ssh] reconnect attempt ${attempt} failed: ${String(error)}`)
-              await sleep(5_000)
-            }
-          }
-          if (await prepareMeasuredShell(orcaPage, 30_000)) {
-            console.log('[desktop-ssh] an explicit disconnect and reconnect revived the pane')
-            return
-          }
-          console.log('[desktop-ssh] the pane stayed dead after an explicit reconnect; new tab')
-          if ((await readSshConnectionStatus(orcaPage, remote.targetId)) !== 'connected') {
-            await reconnectDisconnectedDockerSshRelayTarget(orcaPage, remote.targetId)
-          }
-          await createRemoteTerminalTab(orcaPage, remote.worktreeId)
+    await runWithTopologyTeardown(
+      async () => {
+        started = await startImpairedDockerSshTarget(process.cwd())
+        const { target } = started
+        console.log(`[desktop-ssh] target ${target.containerName} at ${target.host}`)
+        const { remote, shell } = await openImpairedDockerSshShell(orcaPage, started)
+        const session = {
+          page: orcaPage,
+          network: started.network,
+          connection: { kind: 'ssh' as const, targetId: remote.targetId },
+          shell
         }
-      })
-      expect(results).toHaveLength(settings.runs * settings.profiles.length)
-    } finally {
-      stopImpairedDockerSshTarget(started)
-    }
+
+        const added = await measureAddedEchoDelay(session)
+        console.log(
+          `[desktop-ssh] echo p50 unshaped=${added.baselineMs.toFixed(0)}ms, with 300ms each way=${added.delayedMs.toFixed(0)}ms`
+        )
+        expect(added.delayedMs - added.baselineMs).toBeGreaterThanOrEqual(600)
+
+        const results = await runImpairedLatencyMatrix(session, {
+          ...settings,
+          spec: 'desktop-ssh',
+          context: {
+            relayGracePeriodSeconds: 'default',
+            unshapedEchoP50Ms: Math.round(added.baselineMs),
+            echoP50With300MsEachWayMs: Math.round(added.delayedMs)
+          },
+          reopenTerminal: async (deadShellPid) => {
+            // Why: tells a dead relay or shell apart from a pane the app no longer feeds.
+            const deadShell = execDockerSshRelayTargetCommand(
+              target,
+              `ps -o pid=,etime=,comm= -p ${deadShellPid} || echo "shell ${deadShellPid} gone"`
+            )
+            const relays = listDockerSshRelayProcesses(target)
+            console.log(
+              `[desktop-ssh] reopening; remote: ${deadShell.trim()}; ${relays.length} relay processes`
+            )
+            // Why retry: on a lossy path the reconnect itself can fail, as it would for a person.
+            for (let attempt = 1; attempt <= 3; attempt += 1) {
+              try {
+                await reconnectDockerSshRelayTarget(orcaPage, remote.targetId)
+                break
+              } catch (error) {
+                console.log(`[desktop-ssh] reconnect attempt ${attempt} failed: ${String(error)}`)
+                await sleep(5_000)
+              }
+            }
+            if (await prepareMeasuredShell(orcaPage, 30_000)) {
+              console.log('[desktop-ssh] an explicit disconnect and reconnect revived the pane')
+              return
+            }
+            console.log('[desktop-ssh] the pane stayed dead after an explicit reconnect; new tab')
+            if ((await readSshConnectionStatus(orcaPage, remote.targetId)) !== 'connected') {
+              await reconnectDisconnectedDockerSshRelayTarget(orcaPage, remote.targetId)
+            }
+            await createRemoteTerminalTab(orcaPage, remote.worktreeId)
+          }
+        })
+        expect(results).toHaveLength(settings.runs * settings.profiles.length)
+      },
+      () => stopImpairedDockerSshTarget(started)
+    )
   })
 })

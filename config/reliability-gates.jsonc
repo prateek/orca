@@ -21758,6 +21758,24 @@
           "date": "2026-10-06",
           "runner": "local",
           "platform": "macos",
+          "command": "ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_E2E_SSH_DOCKER=1 ORCA_BACKGROUND_LAUNCH=1 pnpm exec playwright test tests/e2e/ssh-terminal-pane-after-long-outage.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "failed",
+          "durationSeconds": 222,
+          "summary": "After review (pid-based verdict): cut 1 was answered by the same shell 31 s after restore; after cut 2 no shell answered in 90 s although the host showed connected 31 s after restore, the remote shell was alive and a new tab worked at once. Relay processes 3 before and after."
+        },
+        {
+          "date": "2026-10-06",
+          "runner": "local",
+          "platform": "macos",
+          "command": "ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_BACKGROUND_LAUNCH=1 ORCA_E2E_REMOTE_SERVER_APPIMAGE=<path to orca-linux AppImage> pnpm exec playwright test tests/e2e/paired-server-input-across-outage.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "failed",
+          "durationSeconds": 491,
+          "summary": "After review (unanswered runs counted apart): 2 of 5 runs lost 16 and 17 of 32 characters across unavailable/connecting and back to verified/ready; the other three delivered 32/32."
+        },
+        {
+          "date": "2026-10-06",
+          "runner": "local",
+          "platform": "macos",
           "command": "ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_BACKGROUND_LAUNCH=1 ORCA_E2E_REMOTE_SERVER_APPIMAGE=<path to orca-linux AppImage> pnpm exec playwright test tests/e2e/paired-server-input-across-outage.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
           "result": "failed",
           "durationSeconds": 694,

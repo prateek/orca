@@ -4,9 +4,11 @@ import path from 'node:path'
 import type { Page } from '@stablyai/playwright-test'
 import { decodePairingOffer, encodePairingOffer } from '../../../src/shared/pairing'
 import {
+  assertContainerAddressForwarderLived,
   startContainerAddressForwarder,
   type ContainerAddressForwarder
 } from './container-address-forwarder'
+import { docker } from './docker-command'
 import { hashDockerFixtureDirectory } from './docker-ssh-relay-image'
 import { parseHeadlessPairedRuntimePairingOffer } from './headless-paired-runtime-serve-readiness'
 import {
@@ -36,14 +38,6 @@ export type DockerRemoteOrcaServer = {
   offer: RuntimeDesktopPairingOffer
   network: ImpairedContainerNetwork
   forwarder: ContainerAddressForwarder
-}
-
-function docker(args: string[], timeoutMs = 30_000): string {
-  return execFileSync('docker', args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: timeoutMs
-  }).trim()
 }
 
 function ensureImage(root: string): string {
@@ -174,4 +168,5 @@ export function stopDockerRemoteOrcaServer(server: DockerRemoteOrcaServer | null
   server.forwarder.stop()
   stopImpairedNetwork(server.network)
   spawnSync('docker', ['rm', '-f', server.containerName], { stdio: 'ignore', timeout: 30_000 })
+  assertContainerAddressForwarderLived(server.forwarder)
 }

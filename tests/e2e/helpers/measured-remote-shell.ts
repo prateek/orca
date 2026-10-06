@@ -107,6 +107,8 @@ export async function prepareMeasuredShell(
  */
 export async function readShellPid(page: Page, timeoutMs: number): Promise<string | null> {
   await focusActiveTerminalInput(page)
+  // Why Ctrl+C: whatever was typed on the line before must not become the command's name.
+  await page.keyboard.press('Control+c')
   await page.keyboard.type(' echo pid=$$')
   await page.keyboard.press('Enter')
   const lines = await waitForScreen(

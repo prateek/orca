@@ -72,7 +72,8 @@ test.describe('Paired remote server input across an outage', () => {
       }
       shapeImpairedNetwork(server.network, profile.shape)
       const reports: string[] = []
-      const failed: string[] = []
+      const lostInput: string[] = []
+      const unanswered: string[] = []
       for (let run = 1; run <= runs; run += 1) {
         if (!(await clearMeasuredShell(orcaPage, session.shell, 30_000))) {
           const recovered = await prepareMeasuredShell(orcaPage, 60_000)
@@ -85,15 +86,22 @@ test.describe('Paired remote server input across an outage', () => {
         const report = describeRun(run, cut)
         console.log(`[server-outage] ${report}`)
         reports.push(report)
-        if (cut.lost !== 0 || cut.duplicated !== 0) {
-          failed.push(report)
+        // Why apart: a shell that never answered cannot show loss, only that the pane was dead.
+        if (cut.lost === null) {
+          unanswered.push(report)
+        } else if (cut.lost > 0 || cut.duplicated !== 0) {
+          lostInput.push(report)
         }
       }
-      if (failed.length > 0) {
+      if (lostInput.length > 0 || unanswered.length > 0) {
+        const unknown =
+          unanswered.length > 0
+            ? `\nIn ${unanswered.length} more the shell never answered, so loss could not be judged:\n${unanswered.join('\n')}`
+            : ''
         throw new Error(
-          `#25784: ${failed.length} of ${runs} runs did not deliver every character typed around a ` +
+          `#25784: ${lostInput.length} of ${runs} runs did not deliver every character typed around a ` +
             `${cutMs / 1000} s outage on the ${profile.name} link. Each line ends with what ` +
-            `the runtime status showed, timed from the cut:\n${failed.join('\n')}`
+            `the runtime status showed, timed from the cut:\n${lostInput.join('\n')}${unknown}`
         )
       }
     } finally {

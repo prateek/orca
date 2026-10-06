@@ -1,4 +1,5 @@
 import type { Page } from '@stablyai/playwright-test'
+import { resolveActiveTabId } from './terminal-pane-identity'
 
 /** Times are the renderer's `performance.now()`, so no cross-process work sits inside a sample. */
 export type TerminalEchoSample = {
@@ -62,121 +63,118 @@ export async function installTerminalEchoProbe(
   page: Page,
   options: TerminalEchoProbeOptions
 ): Promise<void> {
-  await page.evaluate(({ prompt, target, burstMarker }) => {
-    const activePane = () => {
-      const state = window.__store?.getState()
-      const worktreeId = state?.activeWorktreeId
-      const tabId =
-        state?.activeTabType === 'terminal'
-          ? state.activeTabId
-          : worktreeId
-            ? (state?.activeTabIdByWorktree?.[worktreeId] ?? null)
-            : null
-      const manager = tabId ? window.__paneManagers?.get(tabId) : null
-      return manager?.getActivePane?.() ?? manager?.getPanes?.()[0] ?? null
-    }
-    window.__terminalEchoProbe?.dispose()
-    const pane = activePane()
-    if (!pane) {
-      throw new Error('Terminal echo probe: no active terminal pane')
-    }
-    const terminal = pane.terminal
-    const samples: TerminalEchoSample[] = []
-    const pending: TerminalEchoSample[] = []
-    const awaitingRender: TerminalEchoSample[] = []
-    const burst: TerminalOutputBurstTiming = {
-      startedAtMs: null,
-      parsedAtMs: null,
-      renderedAtMs: null
-    }
-    let renderEvents = 0
-
-    // Why no separator: a wrapped line splits across rows and trimmed rows rejoin at the break.
-    // Why baseY: the live screen, whether or not the viewport is scrolled up into history.
-    const screenText = (): string => {
-      const buffer = terminal.buffer.active
-      let text = ''
-      for (let row = 0; row < terminal.rows; row += 1) {
-        text += buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? ''
+  const tabId = await resolveActiveTabId(page)
+  await page.evaluate(
+    ({ prompt, target, burstMarker, tabId }) => {
+      // Why by tab id: a remounted or replaced pane under the same tab no longer holds `terminal`.
+      const activePane = () => {
+        const manager = tabId ? window.__paneManagers?.get(tabId) : null
+        return manager?.getActivePane?.() ?? manager?.getPanes?.()[0] ?? null
       }
-      return text
-    }
-    const burstFinished = (): boolean => {
-      const buffer = terminal.buffer.active
-      const last = buffer.baseY + buffer.cursorY
-      for (let row = last; row >= Math.max(0, last - 6); row -= 1) {
-        if (buffer.getLine(row)?.translateToString(true) === burstMarker) {
-          return true
+      window.__terminalEchoProbe?.dispose()
+      const pane = activePane()
+      if (!pane) {
+        throw new Error('Terminal echo probe: no active terminal pane')
+      }
+      const terminal = pane.terminal
+      const samples: TerminalEchoSample[] = []
+      const pending: TerminalEchoSample[] = []
+      const awaitingRender: TerminalEchoSample[] = []
+      const burst: TerminalOutputBurstTiming = {
+        startedAtMs: null,
+        parsedAtMs: null,
+        renderedAtMs: null
+      }
+      let renderEvents = 0
+
+      // Why no separator: a wrapped line splits across rows and trimmed rows rejoin at the break.
+      // Why baseY: the live screen, whether or not the viewport is scrolled up into history.
+      const screenText = (): string => {
+        const buffer = terminal.buffer.active
+        let text = ''
+        for (let row = 0; row < terminal.rows; row += 1) {
+          text += buffer.getLine(buffer.baseY + row)?.translateToString(true) ?? ''
         }
+        return text
       }
-      return false
-    }
-
-    const parsed = terminal.onWriteParsed(() => {
-      const now = performance.now()
-      if (pending.length > 0) {
-        const text = screenText()
-        // Why in order: one parse can land several queued characters at once.
-        while (
-          pending.length > 0 &&
-          text.includes(prompt + target.slice(0, pending[0].index + 1))
-        ) {
-          const sample = pending.shift()
-          if (sample) {
-            sample.parsedAtMs = now
-            awaitingRender.push(sample)
+      const burstFinished = (): boolean => {
+        const buffer = terminal.buffer.active
+        const last = buffer.baseY + buffer.cursorY
+        for (let row = last; row >= Math.max(0, last - 6); row -= 1) {
+          if (buffer.getLine(row)?.translateToString(true) === burstMarker) {
+            return true
           }
         }
+        return false
       }
-      if (burstMarker && burst.startedAtMs !== null && burst.parsedAtMs === null) {
-        if (burstFinished()) {
-          burst.parsedAtMs = now
-        }
-      }
-    })
-    const rendered = terminal.onRender(() => {
-      renderEvents += 1
-      const now = performance.now()
-      for (const sample of awaitingRender.splice(0)) {
-        sample.renderedAtMs = now
-      }
-      if (burst.parsedAtMs !== null && burst.renderedAtMs === null) {
-        burst.renderedAtMs = now
-      }
-    })
-    // Why window capture: it runs before xterm's own handler forwards the key to the PTY.
-    const onKeyDown = (event: KeyboardEvent): void => {
-      const now = performance.now()
-      if (event.key === 'Enter') {
-        if (burstMarker && burst.startedAtMs === null) {
-          burst.startedAtMs = now
-        }
-        return
-      }
-      if (event.key.length !== 1 || samples.length >= target.length) {
-        return
-      }
-      const sample = { index: samples.length, keyAtMs: now, parsedAtMs: null, renderedAtMs: null }
-      samples.push(sample)
-      pending.push(sample)
-    }
-    window.addEventListener('keydown', onKeyDown, { capture: true })
 
-    window.__terminalEchoProbe = {
-      report: () => ({
-        samples: samples.map((sample) => ({ ...sample })),
-        burst: { ...burst },
-        renderEvents,
-        nowMs: performance.now(),
-        paneReplaced: activePane()?.terminal !== terminal
-      }),
-      dispose: () => {
-        window.removeEventListener('keydown', onKeyDown, { capture: true })
-        parsed.dispose()
-        rendered.dispose()
+      const parsed = terminal.onWriteParsed(() => {
+        const now = performance.now()
+        if (pending.length > 0) {
+          const text = screenText()
+          // Why in order: one parse can land several queued characters at once.
+          while (
+            pending.length > 0 &&
+            text.includes(prompt + target.slice(0, pending[0].index + 1))
+          ) {
+            const sample = pending.shift()
+            if (sample) {
+              sample.parsedAtMs = now
+              awaitingRender.push(sample)
+            }
+          }
+        }
+        if (burstMarker && burst.startedAtMs !== null && burst.parsedAtMs === null) {
+          if (burstFinished()) {
+            burst.parsedAtMs = now
+          }
+        }
+      })
+      const rendered = terminal.onRender(() => {
+        renderEvents += 1
+        const now = performance.now()
+        for (const sample of awaitingRender.splice(0)) {
+          sample.renderedAtMs = now
+        }
+        if (burst.parsedAtMs !== null && burst.renderedAtMs === null) {
+          burst.renderedAtMs = now
+        }
+      })
+      // Why window capture: it runs before xterm's own handler forwards the key to the PTY.
+      const onKeyDown = (event: KeyboardEvent): void => {
+        const now = performance.now()
+        if (event.key === 'Enter') {
+          if (burstMarker && burst.startedAtMs === null) {
+            burst.startedAtMs = now
+          }
+          return
+        }
+        if (event.key.length !== 1 || samples.length >= target.length) {
+          return
+        }
+        const sample = { index: samples.length, keyAtMs: now, parsedAtMs: null, renderedAtMs: null }
+        samples.push(sample)
+        pending.push(sample)
       }
-    }
-  }, options)
+      window.addEventListener('keydown', onKeyDown, { capture: true })
+
+      window.__terminalEchoProbe = {
+        report: () => ({
+          samples: samples.map((sample) => ({ ...sample })),
+          burst: { ...burst },
+          renderEvents,
+          nowMs: performance.now(),
+          paneReplaced: activePane()?.terminal !== terminal
+        }),
+        dispose: () => {
+          window.removeEventListener('keydown', onKeyDown, { capture: true })
+          parsed.dispose()
+          rendered.dispose()
+        }
+      }
+    },
+    { ...options, tabId }
+  )
 }
 
 export async function readTerminalEchoProbe(page: Page): Promise<TerminalEchoProbeReport> {
@@ -195,16 +193,12 @@ export async function rendererNowMs(page: Page): Promise<number> {
 
 /** Reads the active pane's screen fresh each call, so it follows a remounted pane. */
 export async function readTerminalScreen(page: Page): Promise<TerminalScreen | null> {
-  return page.evaluate(() => {
-    const state = window.__store?.getState()
-    const worktreeId = state?.activeWorktreeId
-    const tabId =
-      state?.activeTabType === 'terminal'
-        ? state.activeTabId
-        : worktreeId
-          ? (state?.activeTabIdByWorktree?.[worktreeId] ?? null)
-          : null
-    const manager = tabId ? window.__paneManagers?.get(tabId) : null
+  const tabId = await resolveActiveTabId(page)
+  if (!tabId) {
+    return null
+  }
+  return page.evaluate((tabId) => {
+    const manager = window.__paneManagers?.get(tabId)
     const pane = manager?.getActivePane?.() ?? manager?.getPanes?.()[0] ?? null
     if (!pane) {
       return null
@@ -231,5 +225,5 @@ export async function readTerminalScreen(page: Page): Promise<TerminalScreen | n
       cols: pane.terminal.cols,
       rows: pane.terminal.rows
     }
-  })
+  }, tabId)
 }

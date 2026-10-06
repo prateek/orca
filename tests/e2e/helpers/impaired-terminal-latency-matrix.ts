@@ -14,7 +14,12 @@ import {
   type TypingMeasurement
 } from './impaired-terminal-latency-scenarios'
 import { summarizeImpairedLatencyRuns } from './impaired-terminal-latency-report'
-import { clearMeasuredShell, prepareMeasuredShell, randomShellToken } from './measured-remote-shell'
+import {
+  clearMeasuredShell,
+  prepareMeasuredShell,
+  randomShellToken,
+  sleep
+} from './measured-remote-shell'
 import {
   applyNetworkTravelProfile,
   NETWORK_TRAVEL_PROFILES,
@@ -177,6 +182,7 @@ async function sequentialEchoMedianMs(session: ImpairedTerminalSession): Promise
       if (Date.now() > deadline) {
         throw new Error(`Typed character ${index} was not echoed within 30s`)
       }
+      await sleep(50)
     }
   }
   const { samples } = await readTerminalEchoProbe(page)

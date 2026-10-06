@@ -4,8 +4,10 @@ import { mkdtempSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Page } from '@stablyai/playwright-test'
+import { docker } from './docker-command'
 import { ensureDockerSshRelayImage } from './docker-ssh-relay-image'
 import {
+  assertContainerAddressForwarderLived,
   startContainerAddressForwarder,
   type ContainerAddressForwarder
 } from './container-address-forwarder'
@@ -27,6 +29,14 @@ import { connectSshTestTarget, type ConnectedSshTestTarget } from './ssh-test-ta
 import { ensureTerminalVisible, waitForActiveWorktree, waitForSessionReady } from './store'
 import { waitForActivePanePtyId, waitForActiveTerminalManager } from './terminal'
 import { readTerminalScreen } from './terminal-echo-probe'
+
+/**
+ * Why client-alive: a connection that dies silently in a network cut would otherwise leave an
+ * idle `sshd: root@notty` on the target until the ~2 h TCP keepalive clears it. Only this target
+ * sets it, so the other Docker SSH specs keep the fixture's default sshd. A 30 s cut sits inside
+ * the 45 s window, so what the app sees after a long cut includes sshd dropping the session.
+ */
+const SSHD_CLIENT_ALIVE_ARGS = ['-o', 'ClientAliveInterval=15', '-o', 'ClientAliveCountMax=3']
 
 export type ImpairedDockerSshTarget = {
   /** `host` and `port` are the container's own address, never a published port. */
@@ -58,20 +68,13 @@ export async function startImpairedDockerSshTarget(root: string): Promise<Impair
   }
   let network: ImpairedContainerNetwork | undefined
   try {
-    execFileSync('docker', dockerSshRelayRunArgs(containerName, publicKey, []), {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 120_000
-    })
-    target.containerIp = execFileSync(
-      'docker',
-      [
-        'inspect',
-        '--format',
-        '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}',
-        containerName
-      ],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 }
-    ).trim()
+    docker(dockerSshRelayRunArgs(containerName, publicKey, [], SSHD_CLIENT_ALIVE_ARGS), 120_000)
+    target.containerIp = docker([
+      'inspect',
+      '--format',
+      '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}',
+      containerName
+    ])
     target.host = target.containerIp
     waitForDockerSshRelayTargetSsh(target)
     seedDockerSshRelayRepo(target, DOCKER_SSH_RELAY_REMOTE_REPO_PATH)
@@ -126,4 +129,5 @@ export function stopImpairedDockerSshTarget(started: ImpairedDockerSshTarget | n
   started.forwarder.stop()
   stopImpairedNetwork(started.network)
   cleanupDockerSshRelayTarget(started.target)
+  assertContainerAddressForwarderLived(started.forwarder)
 }

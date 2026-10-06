@@ -2,6 +2,7 @@ import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { docker } from './docker-command'
 import { hashDockerFixtureDirectory } from './docker-ssh-relay-image'
 import {
   netemArguments,
@@ -68,14 +69,6 @@ export function ensureImpairedNetworkLinkImage(root: string): string {
     })
   }
   return image
-}
-
-function docker(args: string[], timeoutMs = 30_000): string {
-  return execFileSync('docker', args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: timeoutMs
-  }).trim()
 }
 
 function removeContainers(...containers: string[]): void {

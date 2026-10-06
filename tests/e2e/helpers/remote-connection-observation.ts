@@ -1,4 +1,5 @@
 import type { Page } from '@stablyai/playwright-test'
+import { resolveActiveTabId } from './terminal-pane-identity'
 
 /** Which connection a sample reads: a direct SSH target or a paired remote Orca server. */
 export type RemoteConnectionSource =
@@ -24,53 +25,63 @@ export type RemoteConnectionChange = {
 }
 
 /**
- * One reading of what the app shows about a remote connection: the store's state for it, and any
- * text on screen a person would read as "disconnected" or "the process died".
+ * One reading of what the app shows about a remote connection: the store's state for it, and the
+ * text of any status region (the terminal's reconnect overlay and banner) a person would read as
+ * "disconnected" or "the process died".
+ *
+ * Why no `innerText`: it forces layout on the renderer thread whose parse time is the metric;
+ * `textContent` of the few `role="status"` elements does not.
  */
 export async function sampleRemoteConnection(
   page: Page,
   source: RemoteConnectionSource
 ): Promise<RemoteConnectionSample> {
-  return page.evaluate((source) => {
-    const state = window.__store?.getState()
-    let connection = 'unknown'
-    if (source.kind === 'ssh') {
-      const ssh = state?.sshConnectionStates.get(source.targetId)
-      connection = ssh ? `${ssh.status}${ssh.error ? ` (${ssh.error})` : ''}` : 'absent'
-    } else {
-      const snapshot = state?.runtimeStatusByEnvironmentId.get(source.environmentId)?.snapshot
-      connection = snapshot ? `${snapshot.verification}/${snapshot.transport}` : 'absent'
-    }
-    const worktreeId = state?.activeWorktreeId
-    const tabId =
-      state?.activeTabType === 'terminal'
-        ? state.activeTabId
-        : worktreeId
-          ? (state?.activeTabIdByWorktree?.[worktreeId] ?? null)
-          : null
-    const manager = tabId ? window.__paneManagers?.get(tabId) : null
-    const pane = manager?.getActivePane?.() ?? manager?.getPanes?.()[0] ?? null
-    const problem =
-      /disconnect|reconnect|connecting|connection required|offline|unreachable|connection lost|not connected|exited|terminated|unavailable|timed out|lost contact/i
-    const notices = new Set<string>()
-    for (const line of document.body.innerText.split('\n')) {
-      const text = line.trim()
-      if (text.length > 0 && text.length <= 160 && problem.test(text)) {
-        notices.add(text)
+  const tabId = await resolveActiveTabId(page)
+  return page.evaluate(
+    ({ source, tabId }) => {
+      const state = window.__store?.getState()
+      let connection = 'unknown'
+      if (source.kind === 'ssh') {
+        const ssh = state?.sshConnectionStates.get(source.targetId)
+        connection = ssh ? `${ssh.status}${ssh.error ? ` (${ssh.error})` : ''}` : 'absent'
+      } else {
+        const snapshot = state?.runtimeStatusByEnvironmentId.get(source.environmentId)?.snapshot
+        connection = snapshot ? `${snapshot.verification}/${snapshot.transport}` : 'absent'
       }
-    }
-    // Why the icon: the sidebar marks a disconnected host with an icon, which has no text.
-    const hostsShownOffline = document.querySelectorAll('svg.lucide-server-off').length
-    return {
-      atMs: performance.now(),
-      state:
-        hostsShownOffline > 0
-          ? `${connection}, ${hostsShownOffline} host shown offline`
-          : connection,
-      notices: [...notices].sort().slice(0, 8),
-      ptyId: pane ? (pane.container.dataset.ptyId ?? null) : 'no-pane'
-    }
-  }, source)
+      const manager = tabId ? window.__paneManagers?.get(tabId) : null
+      const pane = manager?.getActivePane?.() ?? manager?.getPanes?.()[0] ?? null
+      const problem =
+        /disconnect|reconnect|connecting|connection required|offline|unreachable|connection lost|not connected|exited|terminated|unavailable|timed out|lost contact/i
+      const notices = new Set<string>()
+      for (const region of document.querySelectorAll('[role="status"]')) {
+        // Why text nodes: `textContent` would run a title straight into the line after it.
+        const walker = document.createTreeWalker(region, NodeFilter.SHOW_TEXT)
+        const parts: string[] = []
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const part = node.textContent?.trim() ?? ''
+          if (part.length > 0) {
+            parts.push(part)
+          }
+        }
+        const text = parts.join(' ')
+        if (text.length > 0 && text.length <= 240 && problem.test(text)) {
+          notices.add(text)
+        }
+      }
+      // Why the icon: the sidebar marks a disconnected host with an icon, which has no text.
+      const hostsShownOffline = document.querySelectorAll('svg.lucide-server-off').length
+      return {
+        atMs: performance.now(),
+        state:
+          hostsShownOffline > 0
+            ? `${connection}, ${hostsShownOffline} host shown offline`
+            : connection,
+        notices: [...notices].sort().slice(0, 8),
+        ptyId: pane ? (pane.container.dataset.ptyId ?? null) : 'no-pane'
+      }
+    },
+    { source, tabId }
+  )
 }
 
 /** The store's status for an SSH target: `connected`, `reconnecting`, ..., or null if unknown. */

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { docker } from './docker-command'
 import { getDockerSshRelayImage } from './docker-ssh-relay-image'
 
 import type { TestInfo } from '@stablyai/playwright-test'
@@ -20,14 +21,6 @@ export type DockerSshRelayTarget = {
   tempDir: string
 }
 
-function run(command: string, args: string[], opts: { timeoutMs?: number } = {}): string {
-  return execFileSync(command, args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: opts.timeoutMs ?? 30_000
-  }).trim()
-}
-
 function tryRun(command: string, args: string[], opts: { timeoutMs?: number } = {}): void {
   spawnSync(command, args, { stdio: 'ignore', timeout: opts.timeoutMs ?? 10_000 })
 }
@@ -40,24 +33,14 @@ export function execDockerSshRelayTargetCommand(
   target: DockerSshRelayTarget,
   command: string
 ): string {
-  return run('docker', ['exec', target.containerName, 'bash', '-lc', command], {
-    timeoutMs: 60_000
-  })
+  return docker(['exec', target.containerName, 'bash', '-lc', command], 60_000)
 }
 
 export function execDockerSshRelayTargetControlCommand(
   target: DockerSshRelayTarget,
   command: string
 ): string {
-  return run('docker', [
-    'exec',
-    target.containerName,
-    'bash',
-    '--noprofile',
-    '--norc',
-    '-c',
-    command
-  ])
+  return docker(['exec', target.containerName, 'bash', '--noprofile', '--norc', '-c', command])
 }
 
 function sshArgs(target: DockerSshRelayTarget, command: string): string[] {
@@ -248,14 +231,18 @@ export function copyFileIntoDockerSshRelayTarget(
   localPath: string,
   remotePath: string
 ): void {
-  run('docker', ['cp', localPath, `${target.containerName}:${remotePath}`], { timeoutMs: 120_000 })
+  docker(['cp', localPath, `${target.containerName}:${remotePath}`], 120_000)
 }
 
-/** `docker run` arguments for the fixture image with `publicKey` authorised for root. */
+/**
+ * `docker run` arguments for the fixture image with `publicKey` authorised for root.
+ * `sshdArgs` are appended to the sshd command line, e.g. `-o` options a spec needs.
+ */
 export function dockerSshRelayRunArgs(
   containerName: string,
   publicKey: string,
-  dockerArgs: string[]
+  dockerArgs: string[],
+  sshdArgs: string[] = []
 ): string[] {
   return [
     'run',
@@ -273,9 +260,7 @@ export function dockerSshRelayRunArgs(
       'chmod 600 /root/.ssh/authorized_keys',
       'git config --global user.email e2e@test.local',
       'git config --global user.name "Orca Docker SSH E2E"',
-      // Why client-alive: a connection that dies silently in a network cut would otherwise leave
-      // an idle `sshd: root@notty` on the target until the ~2 h TCP keepalive clears it.
-      'exec /usr/sbin/sshd -D -e -o ClientAliveInterval=15 -o ClientAliveCountMax=3'
+      ['exec /usr/sbin/sshd -D -e', ...sshdArgs].join(' ')
     ].join(' && ')
   ]
 }
@@ -290,22 +275,20 @@ export function startDockerSshRelayTarget(testInfo: TestInfo): DockerSshRelayTar
   const bindHost = host === '127.0.0.1' ? host : '0.0.0.0'
   const tempDir = mkdtempSync(path.join(os.tmpdir(), 'orca-ssh-docker-'))
   const identityFile = path.join(tempDir, 'id_ed25519')
-  run('ssh-keygen', ['-t', 'ed25519', '-N', '', '-f', identityFile, '-q'])
+  execFileSync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-f', identityFile, '-q'])
   const publicKey = readFileSync(`${identityFile}.pub`, 'utf8').trim()
   const containerName = `orca-ssh-e2e-${testInfo.workerIndex}-${Date.now()}-${randomUUID().slice(0, 8)}`
   let target: DockerSshRelayTarget | null = null
 
   try {
     tryRun('docker', ['rm', '-f', containerName])
-    run('docker', dockerSshRelayRunArgs(containerName, publicKey, ['-p', `${bindHost}::22`]), {
-      timeoutMs: 120_000
-    })
+    docker(dockerSshRelayRunArgs(containerName, publicKey, ['-p', `${bindHost}::22`]), 120_000)
 
-    const port = Number(run('docker', ['port', containerName, '22/tcp']).split(':').at(-1))
+    const port = Number(docker(['port', containerName, '22/tcp']).split(':').at(-1))
     if (!Number.isInteger(port) || port <= 0) {
       throw new Error(`Unable to read mapped SSH port for ${containerName}`)
     }
-    const containerIp = run('docker', [
+    const containerIp = docker([
       'inspect',
       '--format',
       '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}',

@@ -16,7 +16,19 @@ import { spawn } from 'node:child_process'
  */
 export type ContainerAddressForwarder = {
   port: number
+  /** Set once the process has died on its own, so a later connection failure is not the app's. */
+  readonly exited: { code: number | null; signal: NodeJS.Signals | null } | null
   stop: () => void
+}
+
+/** Throws if the forwarder died during the run; call after the rest of a topology is torn down. */
+export function assertContainerAddressForwarderLived(forwarder: ContainerAddressForwarder): void {
+  if (forwarder.exited) {
+    throw new Error(
+      `The container address forwarder on port ${forwarder.port} died during the run ` +
+        `(code ${forwarder.exited.code}, signal ${forwarder.exited.signal})`
+    )
+  }
 }
 
 const FORWARDER_SCRIPT = `
@@ -41,6 +53,13 @@ export function startContainerAddressForwarder(
   const child = spawn(process.execPath, ['-e', FORWARDER_SCRIPT, address, String(port)], {
     stdio: ['ignore', 'pipe', 'inherit']
   })
+  let exited: ContainerAddressForwarder['exited'] = null
+  let stopping = false
+  child.once('exit', (code, signal) => {
+    if (!stopping) {
+      exited = { code, signal }
+    }
+  })
   return new Promise((resolve, reject) => {
     let output = ''
     const timer = setTimeout(() => {
@@ -55,7 +74,16 @@ export function startContainerAddressForwarder(
       const listening = /^FORWARDER_PORT=(\d+)$/m.exec(output)?.[1]
       if (listening) {
         clearTimeout(timer)
-        resolve({ port: Number(listening), stop: () => child.kill() })
+        resolve({
+          port: Number(listening),
+          get exited() {
+            return exited
+          },
+          stop: () => {
+            stopping = true
+            child.kill()
+          }
+        })
       }
     })
   })

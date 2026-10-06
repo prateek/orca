@@ -151,9 +151,22 @@ export type TerminalGestureInputBucket = {
   lastRefillMs: number
 }
 
-export type TerminalGestureInputQueue = {
+/** Consecutive reports of one kind that reached the queue together. */
+export type TerminalGestureInputRun = {
+  kind: 'click' | 'movement'
   bytes: string
   sequenceCount: number
+  queuedAtMs: number
+}
+
+export type TerminalGestureInputQueue = {
+  runs: TerminalGestureInputRun[]
   timer: ReturnType<typeof setTimeout> | null
-  lastUpdatedMs: number
+}
+
+/** Sends outstanding for one terminal, the window they were sent under, and when the newest left. */
+export type TerminalGestureInputInFlight = {
+  count: number
+  window: number
+  lastSentAtMs: number
 }

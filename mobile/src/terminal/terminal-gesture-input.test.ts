@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   countTerminalGestureInputSequences,
-  isTerminalGestureInput
+  isTerminalGestureInput,
+  splitTerminalGestureInput
 } from './terminal-gesture-input'
 
 const ESC = '\x1b'
@@ -78,5 +79,30 @@ describe('isTerminalGestureInput', () => {
     expect(isTerminalGestureInput(`${ESC}[<0;10000;1M`)).toBe(false)
     expect(isTerminalGestureInput(`${ESC}[<64;1;1m`)).toBe(false)
     expect(isTerminalGestureInput(`${ESC}[<65;1;1m`)).toBe(false)
+  })
+})
+
+describe('splitTerminalGestureInput', () => {
+  it('tells a button press or release from wheel, arrow and drag-motion reports', () => {
+    const reports = splitTerminalGestureInput(
+      `${ESC}[<64;3;4M${ESC}[A${ESC}[<0;3;4M${ESC}[<32;3;5M${ESC}[<0;3;5m${ESC}[M !!${ESC}[M#!!${ESC}[M\`!!`
+    )
+
+    expect(reports?.map((report) => report.kind)).toEqual([
+      'movement',
+      'movement',
+      'click',
+      'movement',
+      'click',
+      'click',
+      'click',
+      'movement'
+    ])
+    expect(reports?.map((report) => report.bytes).join('')).toContain(`${ESC}[<0;3;5m`)
+  })
+
+  it('refuses input the validator refuses', () => {
+    expect(splitTerminalGestureInput(`${ESC}[Arm -rf`)).toBeNull()
+    expect(splitTerminalGestureInput(`${ESC}[A`.repeat(33))).toBeNull()
   })
 })

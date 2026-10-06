@@ -79,7 +79,7 @@ function sshArgs(target: DockerSshRelayTarget, command: string): string[] {
   ]
 }
 
-function waitForSsh(target: DockerSshRelayTarget): void {
+export function waitForDockerSshRelayTargetSsh(target: DockerSshRelayTarget): void {
   const deadline = Date.now() + 90_000
   let lastError = ''
   while (Date.now() < deadline) {
@@ -107,7 +107,7 @@ export function dockerSshRelayRepoSentinel(target: DockerSshRelayTarget, repoPat
   return `${target.containerName}:${repoPath}`
 }
 
-function seedRemoteRepo(target: DockerSshRelayTarget, repoPath: string): void {
+export function seedDockerSshRelayRepo(target: DockerSshRelayTarget, repoPath: string): void {
   const sentinel = dockerSshRelayRepoSentinel(target, repoPath)
   execDockerSshRelayTargetCommand(
     target,
@@ -251,6 +251,35 @@ export function copyFileIntoDockerSshRelayTarget(
   run('docker', ['cp', localPath, `${target.containerName}:${remotePath}`], { timeoutMs: 120_000 })
 }
 
+/** `docker run` arguments for the fixture image with `publicKey` authorised for root. */
+export function dockerSshRelayRunArgs(
+  containerName: string,
+  publicKey: string,
+  dockerArgs: string[]
+): string[] {
+  return [
+    'run',
+    '-d',
+    '--name',
+    containerName,
+    ...dockerArgs,
+    '-e',
+    `AUTHORIZED_KEY=${publicKey}`,
+    getDockerSshRelayImage(),
+    'bash',
+    '-lc',
+    [
+      'printf "%s\\n" "$AUTHORIZED_KEY" > /root/.ssh/authorized_keys',
+      'chmod 600 /root/.ssh/authorized_keys',
+      'git config --global user.email e2e@test.local',
+      'git config --global user.name "Orca Docker SSH E2E"',
+      // Why client-alive: a connection that dies silently in a network cut would otherwise leave
+      // an idle `sshd: root@notty` on the target until the ~2 h TCP keepalive clears it.
+      'exec /usr/sbin/sshd -D -e -o ClientAliveInterval=15 -o ClientAliveCountMax=3'
+    ].join(' && ')
+  ]
+}
+
 export function startDockerSshRelayTarget(testInfo: TestInfo): DockerSshRelayTarget {
   const host = process.env.ORCA_E2E_SSH_TARGET_HOST?.trim() || '127.0.0.1'
   if (host === 'localhost' || host === '::1' || host.startsWith('127.')) {
@@ -268,30 +297,9 @@ export function startDockerSshRelayTarget(testInfo: TestInfo): DockerSshRelayTar
 
   try {
     tryRun('docker', ['rm', '-f', containerName])
-    run(
-      'docker',
-      [
-        'run',
-        '-d',
-        '--name',
-        containerName,
-        '-p',
-        `${bindHost}::22`,
-        '-e',
-        `AUTHORIZED_KEY=${publicKey}`,
-        getDockerSshRelayImage(),
-        'bash',
-        '-lc',
-        [
-          'printf "%s\\n" "$AUTHORIZED_KEY" > /root/.ssh/authorized_keys',
-          'chmod 600 /root/.ssh/authorized_keys',
-          'git config --global user.email e2e@test.local',
-          'git config --global user.name "Orca Docker SSH E2E"',
-          'exec /usr/sbin/sshd -D -e'
-        ].join(' && ')
-      ],
-      { timeoutMs: 120_000 }
-    )
+    run('docker', dockerSshRelayRunArgs(containerName, publicKey, ['-p', `${bindHost}::22`]), {
+      timeoutMs: 120_000
+    })
 
     const port = Number(run('docker', ['port', containerName, '22/tcp']).split(':').at(-1))
     if (!Number.isInteger(port) || port <= 0) {
@@ -307,10 +315,10 @@ export function startDockerSshRelayTarget(testInfo: TestInfo): DockerSshRelayTar
       throw new Error(`Unable to read container IP for ${containerName}`)
     }
     target = { containerName, containerIp, host, identityFile, port, tempDir }
-    waitForSsh(target)
-    seedRemoteRepo(target, DOCKER_SSH_RELAY_REMOTE_REPO_PATH)
-    seedRemoteRepo(target, DOCKER_SSH_PROXY_JUMP_REMOTE_REPO_PATH)
-    seedRemoteRepo(target, DOCKER_SSH_SECOND_HUB_REMOTE_REPO_PATH)
+    waitForDockerSshRelayTargetSsh(target)
+    seedDockerSshRelayRepo(target, DOCKER_SSH_RELAY_REMOTE_REPO_PATH)
+    seedDockerSshRelayRepo(target, DOCKER_SSH_PROXY_JUMP_REMOTE_REPO_PATH)
+    seedDockerSshRelayRepo(target, DOCKER_SSH_SECOND_HUB_REMOTE_REPO_PATH)
     return target
   } catch (error) {
     cleanupDockerSshRelayTarget(

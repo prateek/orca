@@ -81,6 +81,29 @@ export function readDockerSshRelayProcessSnapshot(
   return groups[0] ?? null
 }
 
+/**
+ * Every relay process on the target as "pid role…" lines: daemons, `--connect` bridges and
+ * watchers alike. For diagnostics that count what a reconnect leaves behind.
+ *
+ * Why /proc rather than `pgrep -f relay`: that pattern also matches the shell running it.
+ */
+export function listDockerSshRelayProcesses(target: DockerSshRelayTarget): string[] {
+  const output = execDockerSshRelayTargetCommand(
+    target,
+    `
+for proc in /proc/[0-9]*; do
+  [ -r "$proc/cmdline" ] || continue
+  argv=()
+  mapfile -d '' -t argv < "$proc/cmdline" 2>/dev/null || continue
+  base="\${argv[1]##*/}"
+  case "$base" in relay.js|relay-watcher.js) ;; *) continue ;; esac
+  printf '%s %s %s\\n' "\${proc##*/}" "$base" "\${argv[*]:2}"
+done
+`
+  )
+  return output.split('\n').filter((line) => line.length > 0)
+}
+
 export function readDockerSshRelayProcessSnapshots(
   target: DockerSshRelayTarget
 ): DockerSshRelayProcessSnapshot[] {

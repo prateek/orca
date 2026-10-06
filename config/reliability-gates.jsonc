@@ -21592,6 +21592,212 @@
         "Add a CI job that runs the Docker test on a Linux runner and collect soak runs with zero unexplained flakes."
       ],
       "demotionRule": "Keep experimental; a flake in the timing assertions is investigated against the shaper, never loosened past the profile's own delay."
+    },
+    {
+      "id": "e2e-network.desktop-terminal-latency-matrix",
+      "title": "Desktop terminal latency over impaired networks is measured end to end for SSH and paired-server hosts",
+      "maturity": "experimental",
+      "protection": "partial",
+      "owner": "terminal-runtime",
+      "layer": "docker-e2e",
+      "surfaces": ["SSH terminal pane", "paired remote server terminal pane", "travel network profiles"],
+      "platforms": ["macos", "linux"],
+      "providers": ["ssh", "remote-runtime"],
+      "coveredPlatforms": ["macos"],
+      "coveredProviders": ["ssh", "remote-runtime"],
+      "coverageNotes": "Opt-in measurement, not a pass/fail gate: it asserts only that the shaped path is the one the app uses (300 ms each way adds at least 600 ms to an echo) and that every (run, profile) pair produced a result. The SSH target is the Docker SSH fixture with no published port; the paired server is a released Linux AppImage (ORCA_E2E_REMOTE_SERVER_APPIMAGE) under xvfb in a container. Both are reached at the container's own IP through a loopback forwarder, because macOS Local Network privacy blocks the test Electron binary from container addresses. Needs Docker that routes container IPs (OrbStack); not run in CI.",
+      "motivatingLinks": [
+        "https://github.com/stablyai/orca/issues/18957",
+        "https://github.com/stablyai/orca/issues/23595",
+        "https://github.com/stablyai/orca/pull/25771"
+      ],
+      "invariant": "Keydown-to-echo latency, a 20,000-line output burst, an 8 s forced cut and each profile's own timed outage are measured in the renderer on one connection per topology, and every typed character is checked against what the remote shell received.",
+      "oracle": "A 300 ms each-way shape adds at least 600 ms to the echo median; the matrix returns runs x profiles results, each appended to a JSONL file and summarised as Markdown with medians and ranges per profile.",
+      "commands": [
+        "ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_E2E_SSH_DOCKER=1 ORCA_BACKGROUND_LAUNCH=1 pnpm exec playwright test tests/e2e/impaired-network-ssh-terminal-latency.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+        "ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_BACKGROUND_LAUNCH=1 ORCA_E2E_REMOTE_SERVER_APPIMAGE=<path to orca-linux AppImage> pnpm exec playwright test tests/e2e/impaired-network-paired-server-terminal-latency.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1"
+      ],
+      "testFiles": [
+        "tests/e2e/impaired-network-ssh-terminal-latency.spec.ts",
+        "tests/e2e/impaired-network-paired-server-terminal-latency.spec.ts"
+      ],
+      "assertionRefs": [
+        {
+          "file": "tests/e2e/impaired-network-ssh-terminal-latency.spec.ts",
+          "assertions": ["measures a remote shell across the travel profiles"]
+        },
+        {
+          "file": "tests/e2e/impaired-network-paired-server-terminal-latency.spec.ts",
+          "assertions": ["measures a remote shell across the travel profiles"]
+        }
+      ],
+      "evidenceRuns": [
+        {
+          "date": "2026-10-05",
+          "runner": "local",
+          "platform": "macos",
+          "command": "ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_E2E_SSH_DOCKER=1 ORCA_BACKGROUND_LAUNCH=1 pnpm exec playwright test tests/e2e/impaired-network-ssh-terminal-latency.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "passed",
+          "durationSeconds": 6000,
+          "summary": "10 runs x 8 profiles under OrbStack against the Docker SSH fixture. 300 ms each way added 600 ms to the echo. Every typed character was delivered on every run where the shell could be asked; the subway 30 s outage left the pane dead in 10 of 10 runs (#25783)."
+        },
+        {
+          "date": "2026-10-05",
+          "runner": "local",
+          "platform": "macos",
+          "command": "ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_BACKGROUND_LAUNCH=1 ORCA_E2E_REMOTE_SERVER_APPIMAGE=<path to orca-linux AppImage> pnpm exec playwright test tests/e2e/impaired-network-paired-server-terminal-latency.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "passed",
+          "durationSeconds": 2700,
+          "summary": "10 runs x 8 profiles against orca v1.4.220 serve in a container. Characters typed across an outage were lost in 4 of 80 runs while the status said ready (#25784)."
+        },
+        {
+          "date": "2026-10-06",
+          "runner": "local",
+          "platform": "macos",
+          "command": "ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_E2E_SSH_DOCKER=1 ORCA_BACKGROUND_LAUNCH=1 pnpm exec playwright test tests/e2e/impaired-network-ssh-terminal-latency.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "passed",
+          "durationSeconds": 603,
+          "summary": "Smoke after review: ORCA_E2E_IMPAIRED_RUNS=1 ORCA_E2E_IMPAIRED_PROFILES=homeWifi,inflightGeo. Unshaped echo p50 3 ms, 610 ms with 300 ms each way; the inflight-geo forced cut needed the reopen path (two explicit reconnects failed, a new tab worked)."
+        },
+        {
+          "date": "2026-10-06",
+          "runner": "local",
+          "platform": "macos",
+          "command": "ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_BACKGROUND_LAUNCH=1 ORCA_E2E_REMOTE_SERVER_APPIMAGE=<path to orca-linux AppImage> pnpm exec playwright test tests/e2e/impaired-network-paired-server-terminal-latency.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "passed",
+          "durationSeconds": 101,
+          "summary": "Smoke after review: ORCA_E2E_IMPAIRED_RUNS=1 ORCA_E2E_IMPAIRED_PROFILES=homeWifi,inflightGeo. Unshaped echo p50 19 ms, 621 ms with 300 ms each way; both profiles delivered 32/32 across the forced cut."
+        }
+      ],
+      "runtimeBudget": {
+        "p95Seconds": 7200,
+        "scope": "Ten runs of eight profiles summed to about 100 minutes of measurement for SSH and 45 for the paired server, plus setup; ORCA_E2E_IMPAIRED_RUNS and ORCA_E2E_IMPAIRED_PROFILES narrow a run. p95 not established."
+      },
+      "flakeHistory": {
+        "status": "not-started",
+        "evidence": "A measurement harness; local runs only."
+      },
+      "redGreenEvidence": {
+        "status": "not-required",
+        "evidence": "The specs measure rather than assert product behaviour; the bugs they found are tracked by e2e-network.desktop-terminal-outage-repros."
+      },
+      "performanceBudget": {
+        "required": false,
+        "evidence": "The harness produces the latency numbers; it does not enforce them."
+      },
+      "knownGaps": [
+        "Not run in CI: needs a privileged shaper container and a Docker that routes container IPs from the host.",
+        "The paired server is a released AppImage, not the checkout under test, so a server-side fix is only measured once released.",
+        "The hidden Electron window does not paint, so keydown-to-render times are empty; keydown-to-parse is what is reported."
+      ],
+      "promotionCriteria": [
+        "Run on a Linux CI runner with a container-built server and keep per-profile medians as a tracked artifact."
+      ],
+      "demotionRule": "Keep experimental; a run that fails its shaped-path check is a harness fault to fix, never a number to accept."
+    },
+    {
+      "id": "e2e-network.desktop-terminal-outage-repros",
+      "title": "Desktop terminal panes recover after a network outage and lose no typed input",
+      "maturity": "experimental",
+      "protection": "partial",
+      "owner": "terminal-runtime",
+      "layer": "docker-e2e",
+      "surfaces": ["SSH terminal pane", "SSH relay reconnect", "paired remote server terminal input"],
+      "platforms": ["macos", "linux"],
+      "providers": ["ssh", "remote-runtime"],
+      "coveredPlatforms": ["macos"],
+      "coveredProviders": ["ssh", "remote-runtime"],
+      "coverageNotes": "Two opt-in bug reproductions on the matrix's topologies, both under the subway profile's shape with 30 s cuts, the conditions that reproduce. SSH: the cut repeats three times on one session and after each the pane must echo typed input again within 90 s of the link returning; the failure message reports when the host showed connected, whether the remote shell is alive, whether a new tab works, and the relay process count before and after. Paired server: the forced-cut scenario (32 characters around the outage) runs five times and every character must reach the shell in order. ORCA_E2E_OUTAGE_PROFILE, ORCA_E2E_OUTAGE_MS and ORCA_E2E_OUTAGE_RUNS change the conditions; the passing variants listed under commands show what the product survives.",
+      "motivatingLinks": [
+        "https://github.com/stablyai/orca/issues/25783",
+        "https://github.com/stablyai/orca/issues/25784",
+        "https://github.com/stablyai/orca/pull/25771"
+      ],
+      "invariant": "Once the link is back and the app shows the host connected, the existing terminal pane carries input again; input typed before, during and after an outage reaches the remote shell exactly once and in order, or the app says it did not.",
+      "oracle": "SSH: a nonce typed into the original pane is echoed by the same shell within 90 s of restore and the store reports the target connected. Paired server: bash's own record of the submitted line matches what was typed in every run.",
+      "commands": [
+        "ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_E2E_SSH_DOCKER=1 ORCA_BACKGROUND_LAUNCH=1 pnpm exec playwright test tests/e2e/ssh-terminal-pane-after-long-outage.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+        "ORCA_E2E_OUTAGE_RUNS=1 ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_E2E_SSH_DOCKER=1 ORCA_BACKGROUND_LAUNCH=1 pnpm exec playwright test tests/e2e/ssh-terminal-pane-after-long-outage.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+        "ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_BACKGROUND_LAUNCH=1 ORCA_E2E_REMOTE_SERVER_APPIMAGE=<path to orca-linux AppImage> pnpm exec playwright test tests/e2e/paired-server-input-across-outage.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+        "ORCA_E2E_OUTAGE_PROFILE=unshaped ORCA_E2E_OUTAGE_MS=8000 ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_BACKGROUND_LAUNCH=1 ORCA_E2E_REMOTE_SERVER_APPIMAGE=<path to orca-linux AppImage> pnpm exec playwright test tests/e2e/paired-server-input-across-outage.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1"
+      ],
+      "testFiles": [
+        "tests/e2e/ssh-terminal-pane-after-long-outage.spec.ts",
+        "tests/e2e/paired-server-input-across-outage.spec.ts"
+      ],
+      "assertionRefs": [
+        {
+          "file": "tests/e2e/ssh-terminal-pane-after-long-outage.spec.ts",
+          "assertions": ["echoes typed input again once the link is back"]
+        },
+        {
+          "file": "tests/e2e/paired-server-input-across-outage.spec.ts",
+          "assertions": ["delivers every character typed around an outage"]
+        }
+      ],
+      "evidenceRuns": [
+        {
+          "date": "2026-10-06",
+          "runner": "local",
+          "platform": "macos",
+          "command": "ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_E2E_SSH_DOCKER=1 ORCA_BACKGROUND_LAUNCH=1 pnpm exec playwright test tests/e2e/ssh-terminal-pane-after-long-outage.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "failed",
+          "durationSeconds": 210,
+          "summary": "Reproduces #25783: cut 1 recovered (host connected 16 s after restore, pane echoed at 21 s); after cut 2 the host showed connected 30 s after restore but the pane never echoed in 90 s, the remote shell was alive, a new tab worked at once. Relay processes 3 before and after each cut."
+        },
+        {
+          "date": "2026-10-06",
+          "runner": "local",
+          "platform": "macos",
+          "command": "ORCA_E2E_OUTAGE_RUNS=1 ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_E2E_SSH_DOCKER=1 ORCA_BACKGROUND_LAUNCH=1 pnpm exec playwright test tests/e2e/ssh-terminal-pane-after-long-outage.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "passed",
+          "durationSeconds": 90,
+          "summary": "A single cut on a fresh session: the pane came back 14-21 s after restore in three runs of four (unshaped, subway, subway with typing). The fourth, unshaped, left the host in status error with no retry and the pane dead; that is #25786."
+        },
+        {
+          "date": "2026-10-06",
+          "runner": "local",
+          "platform": "macos",
+          "command": "ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_BACKGROUND_LAUNCH=1 ORCA_E2E_REMOTE_SERVER_APPIMAGE=<path to orca-linux AppImage> pnpm exec playwright test tests/e2e/paired-server-input-across-outage.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "failed",
+          "durationSeconds": 694,
+          "summary": "Reproduces #25784: 4 of 5 runs. Run 2 lost 16 of 32 characters while the status went unavailable/connecting and back to verified/ready; runs 3-5 showed a stray ^C after the first character, so bash received the rest as a new line."
+        },
+        {
+          "date": "2026-10-06",
+          "runner": "local",
+          "platform": "macos",
+          "command": "ORCA_E2E_OUTAGE_PROFILE=unshaped ORCA_E2E_OUTAGE_MS=8000 ORCA_E2E_IMPAIRED_LATENCY=1 ORCA_BACKGROUND_LAUNCH=1 ORCA_E2E_REMOTE_SERVER_APPIMAGE=<path to orca-linux AppImage> pnpm exec playwright test tests/e2e/paired-server-input-across-outage.spec.ts --config tests/playwright.config.ts --project electron-headless --workers=1",
+          "result": "passed",
+          "durationSeconds": 107,
+          "summary": "An 8 s cut on a clean link: 32/32 delivered in all 5 runs with the status at verified/ready throughout, matching the matrix's 0 lost in 40 clean forced cuts."
+        }
+      ],
+      "runtimeBudget": {
+        "p95Seconds": 1200,
+        "scope": "One container start plus three 30 s outages with up to 90 s of recovery each (SSH, 3.5 min), or five forced 30 s cuts on the paired server (12 min); p95 not established."
+      },
+      "flakeHistory": {
+        "status": "not-started",
+        "evidence": "Local runs only."
+      },
+      "redGreenEvidence": {
+        "status": "partial",
+        "evidence": "Red on main under the default conditions (both specs above); green only under conditions the product survives (a single cut; an 8 s cut on a clean link). No fix exists yet to turn the defaults green."
+      },
+      "performanceBudget": {
+        "required": false,
+        "evidence": "Correctness of recovery and delivery, not speed."
+      },
+      "knownGaps": [
+        "Not run in CI: same Docker requirements as the latency matrix.",
+        "Neither bug is deterministic: the SSH pane survived a single cut in three runs of four, and the paired server delivered everything across an 8 s clean cut; the defaults are the conditions that reproduced, not a proof of absence when they pass.",
+        "A fresh session can also end in SSH status error with no retry after the cut (#25786); the SSH spec reports that timeline rather than treating it as #25783."
+      ],
+      "promotionCriteria": [
+        "Fix both bugs, then soak each spec in CI with zero failures before promoting."
+      ],
+      "demotionRule": "Keep experimental until the product fix lands; a failure is the bug, not the harness, unless the shaped-path check in the matrix also fails."
     }
   ]
 }

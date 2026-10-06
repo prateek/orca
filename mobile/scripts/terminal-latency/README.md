@@ -17,7 +17,15 @@ through it end to end. macOS only (iOS Simulator, OrbStack).
    ```
 
    With the flag, the app prints `[lat] ...` lines through Metro (see
-   `mobile/src/terminal/terminal-latency-probes.ts`); without it, nothing is compiled in.
+   `mobile/src/diagnostics/terminal-latency-probes.ts`); without it, nothing is compiled in.
+
+   The WebView's half of the probes (`rx` and the touch lines) lives in a generated script that
+   is built at install time and is not tracked. After checking out or merging this code into an
+   already-installed worktree, rebuild it or those lines never appear:
+
+   ```sh
+   node scripts/build-terminal-document-script.mjs
+   ```
 2. Start the host: `scripts/terminal-latency/start-phone-latency-host.sh <orca-linux-arm64.AppImage>`.
    It builds `tests/e2e/fixtures/agent-terminal-host`, runs an Orca server at the container's IP,
    opens the three terminals, and prints a pairing link.

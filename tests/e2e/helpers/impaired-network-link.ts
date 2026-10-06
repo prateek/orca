@@ -55,7 +55,8 @@ export type ImpairedNetworkPath = ImpairedNetworkLink | ImpairedContainerNetwork
 
 const FIXTURE_PARTS = ['tests', 'e2e', 'fixtures', 'impaired-network-link']
 const LINK_PORT = 7000
-const UNSHAPED: NetworkLinkShape = { uplink: { delayMs: 0 }, downlink: { delayMs: 0 } }
+/** No delay, loss or rate cap in either direction. */
+export const UNSHAPED: NetworkLinkShape = { uplink: { delayMs: 0 }, downlink: { delayMs: 0 } }
 
 export function ensureImpairedNetworkLinkImage(root: string): string {
   const fixtureDir = path.join(root, ...FIXTURE_PARTS)
@@ -177,7 +178,10 @@ export function scheduleNetworkOutages(
       await execFileAsync('docker', cut, { timeout: 30_000 })
       const startedAtMs = Date.now()
       try {
-        await sleepUnlessStopped(schedule.forSeconds)
+        // Why check again: a stop that landed during the cut's exec found no sleep to wake.
+        if (!stopped) {
+          await sleepUnlessStopped(schedule.forSeconds)
+        }
       } finally {
         await execFileAsync('docker', restore, { timeout: 30_000 })
         onOutage?.(startedAtMs, Date.now())

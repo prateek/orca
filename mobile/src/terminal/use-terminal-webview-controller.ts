@@ -14,7 +14,7 @@ import { dispatchTerminalWebViewNotification } from './terminal-webview-notifica
 import { routeTerminalQueryReply } from './terminal-webview-query-reply-routing'
 import { useTerminalWebViewReadyPromises } from './terminal-webview-ready-promises'
 import { createTerminalWriteCoalescer } from './terminal-write-coalescer'
-import { relayTerminalDocumentLatencyProbe } from './terminal-latency-probes'
+import { relayTerminalDocumentLatencyProbe } from '../diagnostics/terminal-latency-probes'
 
 /**
  * Everything `TerminalWebView` does that is not about `react-native-webview`.

@@ -2,7 +2,7 @@
  * Turns one recorded scenario (the phone's probe lines) into numbers.
  *
  * Probe lines, all stamped with the phone's clock in ms:
- *   key <t> "<char>"      a key reached the app
+ *   key <t> "<text>"      the live input changed; <text> is the whole field, one line per key
  *   tx <t> n=<len> <text> a terminal.send left the app;  ack <t> sent=<t> its reply came back
  *   rx <t> top=L.. bot=L.. alt=.. zq=<text>   the screen changed: first and last line markers
  *                         shown, and the typed line as echoed
@@ -73,17 +73,15 @@ function typing(record: ScenarioRecord): Metrics {
       lost++
     }
   }
-  if (delays.length === 0) {
-    return { keysLost: lost, valid: 0 }
+  // Why valid even with nothing echoed: a run that lost every key is the metric's worst case,
+  // and it must count in `keysLost` rather than vanish from the table.
+  const metrics: Metrics = { valid: 1, keysLost: lost, sends: times(record.events, 'tx').length }
+  if (delays.length > 0) {
+    metrics.echoP50Ms = percentile(delays, 0.5)
+    metrics.echoP95Ms = percentile(delays, 0.95)
+    metrics.echoMaxMs = Math.max(...delays)
   }
-  return {
-    valid: 1,
-    echoP50Ms: percentile(delays, 0.5),
-    echoP95Ms: percentile(delays, 0.95),
-    echoMaxMs: Math.max(...delays),
-    keysLost: lost,
-    sends: times(record.events, 'tx').length
-  }
+  return metrics
 }
 
 /** Watching an answer stream in: how long until it starts, and how long the screen freezes. */

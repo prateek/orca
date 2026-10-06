@@ -42,7 +42,7 @@ pnpm exec tsx scripts/terminal-latency/summarize-phone-latency.ts <results.jsonl
 ```
 
 Each run, for each profile (interleaved, so drift spreads over all of them): on Claude Code and
-then Codex, type 20 keys, submit and watch a 40-line answer (with the profile's outage as one
+then Codex, type a 22-character line (20 keys timed), submit and watch a 40-line answer (with the profile's outage as one
 cut 3 s in), a long drag then a tap, a hard flick; then a drag and a flick in `less`. About
 85 s per profile and run on a good link, 160 s on the subway profile. `--profiles` narrows the
 set (names as in the profiles file, plus `unshaped`), `--first-run` resumes.

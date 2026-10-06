@@ -19,7 +19,7 @@ const TABLES: { title: string; scenario: string; tabs: string[]; metrics: [strin
       ['echoP50Ms', 'median ms'],
       ['echoP95Ms', 'p95 ms'],
       ['echoMaxMs', 'worst ms'],
-      ['sends', 'sends for 18 keys'],
+      ['sends', 'sends for 20 keys'],
       ['keysLost', 'keys never echoed']
     ]
   },

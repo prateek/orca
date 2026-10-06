@@ -339,7 +339,7 @@ const server = http.createServer(async (req, res) => {
   } else if (req.method === 'GET' && route.endsWith('/models')) {
     sendJson(res, 200, { object: 'list', data: [], models: [], has_more: false })
   } else if (route === '/healthz') {
-    sendJson(res, 200, { ok: true, ...settings() })
+    sendJson(res, 200, { ok: true, linesEmitted, ...settings() })
   } else {
     sendJson(res, 200, {})
   }

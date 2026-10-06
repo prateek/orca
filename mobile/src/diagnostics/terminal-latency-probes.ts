@@ -6,9 +6,10 @@
  * reads. The phone's own clock is what makes key-to-echo and touch-to-draw measurable from
  * outside without a host or network timestamp.
  *
- * Kinds: `key` (a keystroke reached the live input), `tx`/`ack`/`nak` (a terminal.send left and
- * was answered), `touchstart`/`touchend` (on the terminal surface), `rx` (the screen changed
- * after a drained write; the document reports it).
+ * Kinds: `key` (the live input's text changed; the line carries the whole field text, so one
+ * line per keystroke while typing), `tx`/`ack`/`nak` (a terminal.send left and was answered),
+ * `touchstart`/`touchend` (on the terminal surface), `rx` (the screen changed after a drained
+ * write; the document reports it).
  */
 export const TERMINAL_LATENCY_PROBES = process.env.EXPO_PUBLIC_ORCA_TERMINAL_LATENCY_PROBES === '1'
 

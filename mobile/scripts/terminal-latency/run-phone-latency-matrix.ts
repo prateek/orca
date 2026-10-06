@@ -8,6 +8,7 @@
  *   tsx scripts/terminal-latency/run-phone-latency-matrix.ts --container orca-phone-host \
  *     --label direct --runs 10 --metro-log /path/metro.log --out /path/phone-direct.jsonl
  */
+import { execFileSync } from 'node:child_process'
 import { appendFileSync } from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
@@ -35,6 +36,8 @@ const { values: options } = parseArgs({
     'first-run': { type: 'string', default: '1' },
     profiles: { type: 'string' },
     'metro-log': { type: 'string' },
+    /** The container running the Orca server and the stub; `--container` when they differ. */
+    'host-container': { type: 'string' },
     out: { type: 'string' },
     /** Lines per answer the stub is configured to stream; the run waits for the last one. */
     'answer-lines': { type: 'string', default: '40' }
@@ -44,6 +47,7 @@ if (!options.container || !options.label || !options['metro-log'] || !options.ou
   throw new Error('--container, --label, --metro-log and --out are required')
 }
 const container = options.container
+const hostContainer = options['host-container'] ?? container
 const out = options.out
 const label = options.label
 const answerLines = Number(options['answer-lines'])
@@ -75,7 +79,7 @@ const RETURN_FLICK = verticalStroke(0.74, 0.2, 9)
 /** Finger moves up: `less` moves forward from the top of its file. */
 const PAGER_DRAG = verticalStroke(0.68, 0.2, 60)
 const PAGER_FLICK = verticalStroke(0.74, 0.2, 9)
-const TYPED_TAIL = 'abcdefghijklmnopqr'
+const TYPED_TAIL = 'abcdefghijklmnopq'
 
 const input = simulatorInput(root)
 const probes = phoneProbeLog(options['metro-log'])
@@ -89,6 +93,20 @@ type Cell = { profile: NetworkTravelProfile; run: number; link: ImpairedNetworkP
 function bottomMarker(line: string): number {
   const marker = line.startsWith('rx ') ? /\bbot=L(\d+)/.exec(line) : null
   return marker ? Number(marker[1]) : 0
+}
+
+/** How many numbered lines the host's stub API has served so far, to any agent. */
+function stubLinesEmitted(): number {
+  const health = execFileSync(
+    'docker',
+    ['exec', hostContainer, 'curl', '-fsS', '--max-time', '5', 'http://127.0.0.1:8089/healthz'],
+    { encoding: 'utf8', timeout: 15_000 }
+  )
+  const { linesEmitted } = JSON.parse(health)
+  if (typeof linesEmitted !== 'number') {
+    throw new Error(`the stub did not report linesEmitted: ${health}`)
+  }
+  return linesEmitted
 }
 
 function record(cell: Cell, tab: string, scenario: string, extra: object, events: string[]): void {
@@ -133,11 +151,14 @@ async function impair(cell: Cell): Promise<number> {
   return mark
 }
 
-/** A two-letter code that makes each typed line unique on screen. */
+/** A three-letter code (6,859 values) that makes each typed line unique on screen. */
 function typedLine(cell: Cell, tab: string): string {
   const index = cell.run * 40 + profiles.indexOf(cell.profile) * 2 + (tab === 'codex' ? 1 : 0)
   const letters = 'bcdfghjklmnprstvwxy'
-  return `zq${letters[Math.floor(index / letters.length) % letters.length]}${letters[index % letters.length]}${TYPED_TAIL}`
+  const code = [2, 1, 0]
+    .map((place) => letters[Math.floor(index / letters.length ** place) % letters.length])
+    .join('')
+  return `zq${code}${TYPED_TAIL}`
 }
 
 async function agentScenarios(cell: Cell, tab: 'claude' | 'codex'): Promise<void> {
@@ -155,10 +176,9 @@ async function agentScenarios(cell: Cell, tab: 'claude' | 'codex'): Promise<void
   const typed = probes.since(mark)
   record(cell, tab, 'type', { text }, typed)
 
-  // Why: the stub numbers lines across answers, so the screen's last marker before Enter plus
-  // the answer's length is the marker that means the whole answer has arrived.
-  const lastMarkerBefore = Math.max(0, ...typed.map(bottomMarker).filter((n) => n > 0))
-  const answerEndMarker = lastMarkerBefore + answerLines
+  // Why ask the stub: it numbers lines across every answer it serves, to both agents, so the
+  // screen's own last marker says nothing about where this answer will start.
+  const answerEndMarker = stubLinesEmitted() + answerLines
   mark = probes.mark()
   const startedAt = Date.now()
   input.type('\n')

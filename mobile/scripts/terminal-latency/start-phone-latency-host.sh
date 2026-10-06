@@ -12,7 +12,8 @@ APPIMAGE="$(cd "$(dirname "${1:?AppImage path required}")" && pwd)/$(basename "$
 CONTAINER="${2:-orca-phone-host}"
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 FIXTURE="$ROOT/tests/e2e/fixtures/agent-terminal-host"
-IMAGE="orca-e2e-agent-terminal-host:$(tar -cf - -C "$FIXTURE" . | shasum | cut -c1-16)"
+# Why hash contents: a tar stream carries mtimes, so it would rebuild the image on every checkout.
+IMAGE="orca-e2e-agent-terminal-host:$(cd "$FIXTURE" && find . -type f | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256 | cut -c1-16)"
 WORK="${TMPDIR:-/tmp}/$CONTAINER"
 
 docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -q -t "$IMAGE" "$FIXTURE" >/dev/null

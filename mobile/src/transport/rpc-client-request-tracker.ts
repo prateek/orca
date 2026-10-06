@@ -2,7 +2,7 @@ import { markRpcDeliveryUnknown } from './rpc-delivery-ambiguity'
 import { openRpcRequestBudget, resolvePostConnectRequestTimeout } from './rpc-request-budget'
 import type { SendRequestOptions } from './rpc-client'
 import type { ConnectionState, RpcResponse } from './types'
-import { probeTerminalSend } from '../terminal/terminal-latency-probes'
+import { probeTerminalSend } from '../diagnostics/terminal-latency-probes'
 
 const REQUEST_TIMEOUT_MS = 30_000
 

@@ -1,0 +1,181 @@
+# Multi-server / multi-repo testing worksheet
+
+Goal: give Orca a test capability for multi-repo / multi-server interactions, prove
+we exercise the "same project on two servers, then refresh" condition, and add
+property tests showing cross-server operations preserve state.
+
+## Focus: Remote Orca Servers
+
+"Remote Orca Servers" is the **Orca runtime** feature: an Orca instance runs as an
+"Orca Server" and clients pair and connect over an E2EE WebSocket, operating on it
+via RPC (`repo.list`, `worktree.create`, `projectGroup.create`, …). The
+`runtime:<id>` execution host addresses a paired Orca server. Consistency is
+**event-push**: after a mutation the server emits `reposChanged` /
+`worktreesChanged` and subscribed clients re-query.
+
+Two axes are tested:
+
+- **Server-side consistency (real runtime):**
+  `src/main/runtime/remote-orca-server-consistency.integration.test.ts` drives the
+  **real `OrcaRuntimeService`** (its real mutation + event-emission logic) wrapped
+  by the real `OrcaRuntimeRpcServer` over an ephemeral E2EE WebSocket, with **real
+  git worktrees on disk**. Per testing-philosophy the runtime is NOT mocked — only
+  the persistence store is substituted (`in-memory-runtime-store.ts`, the
+  legitimate seam) and electron is mocked. It proves every connected client
+  converges to the server's source of truth after add-repo / create-worktree /
+  create+move project-group, that a random operation sequence converges, and that
+  two Orca servers stay isolated. **Fault injection on the real runtime** (suppress
+  `notifyReposChanged` in `addRepo`) turns the suite red — so it catches a real
+  missing-emit bug, which the earlier mocked-runtime version could not.
+  Harness: `orca-runtime-server-harness.ts` (real server/client driving, real git
+  repo seeding, server-truth reader).
+
+  Coverage spans the interactions a Remote Orca Server must keep consistent:
+  - creates (`remote-orca-server-consistency.integration.test.ts`): repo add,
+    worktree create, project-group create + move, random op sequence, two-server
+    isolation;
+  - removals & updates (`remote-orca-server-mutations.integration.test.ts`):
+    `repo.update` rename, `repo.rm`, `worktree.rm`, `projectGroup.update`,
+    `projectGroup.delete` — the delete/update emit paths most likely to be missed;
+  - resilience (`remote-orca-server-resilience.integration.test.ts`): a
+    late-joining client sees current state, and a client converges after its event
+    subscription drops mid-mutation (the missed-event gap closes on reconnect +
+    re-query).
+- **Client-side session partitioning:** the `multi-host-session-*` tests below use
+  `runtime:` hosts — they assert a desktop client connected to several Orca
+  servers keeps each server's session slice isolated and lossless across a
+  refresh.
+
+## The reported condition
+
+Add project A on the local machine. Add a remote host B. Add project A on B too,
+while B already has its own unrelated work. Hard-refresh (Cmd/Ctrl+Shift+R).
+"Weird things" happen — state looks lost or confused.
+
+## Where this actually lives (architecture)
+
+Hard refresh = `app.forceReload` → `webContents.reloadIgnoringCache()`
+(`src/main/window/createMainWindow.ts`, binding in `src/shared/keybindings.ts`).
+The renderer loses all in-memory state and rehydrates from the main process on boot.
+
+Workspace session state is **partitioned per execution host** and stitched back
+together by pure functions — this is the seam that governs cross-server state:
+
+- `src/renderer/src/lib/workspace-session-host-split.ts`
+  - `splitWorkspaceSessionByHost(state, hostIdByWorktreeId)` — route each
+    worktree-scoped slice to its owner host; global fields stay on `local`.
+  - `mergeWorkspaceSessionsFromHosts(slices)` — inverse; globals come from `local`,
+    worktree maps are unioned.
+- `src/renderer/src/lib/workspace-session-host-persistence.ts`
+  - `buildHostIdByWorktreeId(state)` — owner map derived from the loaded repos.
+  - `persistWorkspaceSessionByHostSync` / `patchWorkspaceSessionByHost` — the
+    persist (quit / beforeunload / debounced) paths.
+  - `fetchWorkspaceSessionFromHosts(api, repos)` — the boot path: read the `local`
+    partition plus one partition per **known runtime host**, then merge.
+
+Identity model (from `src/shared/types.ts`, `src/shared/execution-host.ts`):
+`ExecutionHostId = 'local' | 'ssh:<id>' | 'runtime:<id>'`. A `Repo` carries its
+host via `connectionId` / `executionHostId`. A `Worktree` id is `<repoId>::<path>`
+— repo ids are unique per host, so the same path on two servers yields distinct
+worktree ids (no id collision). Global active pointers (`activeRepoId`,
+`activeWorktreeId`, `activeTabId`, `activeWorkspaceKey`) live **only** in the
+`local` partition.
+
+## Bug hypothesis (what "weird things" most likely is)
+
+Both persist and fetch depend on the renderer's loaded repo set:
+- persist uses `buildHostIdByWorktreeId(state)` (repo-derived ownership),
+- fetch uses `listKnownRuntimeHostIds(repos)` to decide which partitions to read.
+
+So the round trip is only faithful when the owning host's repos are **known and
+consistent** at both persist and fetch time. The fragile cases:
+
+1. **Owner unknown at fetch** — a runtime host whose repos haven't loaded yet is
+   not in `listKnownRuntimeHostIds`, so its partition is never read. Its worktree
+   state is dropped from the merged session; active pointers into it then fail
+   validation and reset. → lost place / "weird things".
+2. **Owner unknown at persist** — if the owner map is incomplete when splitting,
+   a non-local worktree's state is mis-routed into the `local` blob; a later
+   refresh with full knowledge reads it from the wrong partition.
+
+Net invariant we want to lock: **when both servers' repos are known, a refresh
+preserves every worktree-scoped slice and the active selection, and operations on
+one server never clobber the other server's partition.**
+
+## Test plan
+
+No property-test library exists in the repo. To keep CI deterministic and avoid
+lockfile churn, the harness ships a small **seeded** generator (reproducible via a
+printed seed) instead of adding fast-check.
+
+1. **Harness** — `src/renderer/src/lib/multi-host-session-test-harness.ts`
+   - builders for repos (local / ssh / runtime), worktrees, tabs, sessions;
+   - an in-memory per-host session store fake implementing the real `SessionApi`
+     partition contract;
+   - `simulateRefresh({ knownRepos })` = `persistWorkspaceSessionByHostSync` →
+     `fetchWorkspaceSessionFromHosts`, so we drive the actual product code;
+   - a seeded `WorkspaceSessionState` + topology generator.
+
+2. **Condition test** — `multi-host-session-refresh.test.ts`
+   - Prateek's scenario end to end; refresh preserves both hosts' state and the
+     active selection. Includes the runtime-host partition case and an explicit
+     demonstration of failure mode #1 (unknown owner at fetch) as a regression
+     guard.
+
+3. **Property tests** — `multi-host-session.property.test.ts`
+   - P1 round-trip: `merge(split(s)) deepEquals s` for arbitrary multi-host states.
+   - P2 isolation: each non-local slice contains only worktrees it owns.
+   - P3 refresh fidelity: with all repos known, refresh preserves every
+     worktree-scoped entry and active pointers.
+   - P4 operation independence: mutating server B's session + refresh leaves
+     server A's persisted partition byte-for-byte unchanged.
+## Files
+
+- `src/renderer/src/lib/multi-host-session-test-harness.ts` — topology builders,
+  in-memory per-host partition store, `simulateRefresh`, `persistSnapshots`.
+- `src/renderer/src/lib/multi-host-session-generators.ts` — seeded PRNG + case
+  generator covering every FieldOwnership category.
+- `src/renderer/src/lib/multi-host-session-refresh.test.ts` — the reported
+  condition + failure mode.
+- `src/renderer/src/lib/multi-host-session.property.test.ts` — P1–P4 invariants.
+- `tests/e2e/helpers/multi-docker-ssh-hosts.ts` — starts N real Docker SSH hosts
+  concurrently, seeds named repos.
+- `tests/e2e/multi-server-refresh.spec.ts` — real two-relay test: same project on
+  two Docker hosts (+ B's own work) + local, marker tab per worktree, renderer
+  reload, reconnect, assert no collision and no lost state. Gated behind
+  `ORCA_E2E_SSH_DOCKER=1` (POSIX-only), like `ssh-docker-relay-perf.spec.ts`.
+  Executed against live OrbStack containers: 4/4 green (1 + repeat-each=3). One
+  server = one connection owning multiple repos; durable persistence and
+  post-reload tab restoration are polled to avoid the debounced-writer race.
+
+## Progress log
+
+- [x] Architecture mapped (3 explore subagents): host model, refresh path, harness.
+- [x] Worksheet written.
+- [x] Harness built.
+- [x] Condition test written.
+- [x] Property tests written.
+- [x] Checks green (27 tests, typecheck, lint, format); fault-injection confirms the suite bites.
+- [x] PR opened: prateek/orca#3.
+
+## Investigated bug hypotheses — what testing actually showed
+
+- **Active-remote selection lost on refresh** — *hypothesized, then disproved by
+  test.* I traced a path where `hydrateWorkspaceSession` resets `activeWorktreeId`
+  because remote worktrees aren't enumerated until the relay reconnects
+  (`terminals.ts:2526`). The e2e `restores an active remote worktree after a
+  refresh` proves the real behavior is **correct**: the known-but-unloaded
+  re-validation (`terminals.ts:2462`) keeps the worktree valid, so both its tabs
+  and the active selection survive. Kept as a green regression guard. Good thing I
+  ran it instead of "fixing" the boot path against a phantom.
+- **`fetchWorkspaceSessionFromHosts` dropping unknown-host partitions** — defensive,
+  not user-reachable: `App.tsx` awaits `fetchRepos()` (loads the full persisted
+  repo set, incl. runtime metadata) before the session fetch, so the owning host
+  is always known. The `FAILURE MODE` unit test documents the function-level
+  property; it is not a live bug. Downgraded.
+- **Merge global-field fallback order** (`workspace-session-host-split.ts:353`) —
+  only fires when the local partition is absent, which never happens on a normal
+  boot. Marginal; left as-is.
+
+Net: no confirmed latent product bug in this subsystem — it's better guarded than
+first assumed. The one real cleanup was removing a stray tracked `test test.txt`.
